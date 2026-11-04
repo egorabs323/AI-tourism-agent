@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Travel RAG — туристический гид</title><link rel="stylesheet" href="/static/style.css"/></head>
+<body>
+<div class="layout">
+ <aside class="sidebar">
+  <div class="brand">✦ Travel RAG <span>Локальный ассистент</span></div>
+  <button id="new-chat" class="new-chat">＋ Новый диалог</button>
+  <div class="nav-label">История диалогов</div>
+  <div id="conversations" class="conversations"></div>
+  <div class="side-footer">Wikivoyage · ChromaDB · Qwen3 1.7B<br/>Данные сохраняются на этом ПК</div>
+ </aside>
+ <main class="main">
+  <header class="header"><div><strong>Туристический гид</strong><small>Поиск в Wikivoyage и рекомендации на основе источников</small></div><div class="status"><span class="dot"></span> Локально</div></header>
+  <div class="chat-scroll" id="chat-scroll"><div id="messages" class="messages"><section class="empty"><div class="empty-icon">⌁</div><h1>Куда отправимся?</h1><p>Выбери город и спроси о достопримечательностях или маршруте.</p><div class="suggestions"><button data-prompt="Составь маршрут по Риму на два дня">Маршрут по Риму</button><button data-prompt="Что посмотреть в Париже за один день?">Париж за день</button><button data-prompt="Какие известные музеи есть в Риме?">Музеи Рима</button></div></section></div></div>
+  <div class="composer-wrap"><form id="chat-form" class="composer">
+   <label for="destination">Город / название статьи на английском</label>
+   <input id="destination" maxlength="100" placeholder="Например: Rome, Paris, London" value="Rome" autocomplete="off"/>
+   <label for="question">Твой вопрос</label>
+   <textarea id="question" rows="2" maxlength="1500" placeholder="Например: составь маршрут на два дня по центру Рима"></textarea>
+   <div class="composer-bottom"><span id="hint">Enter — отправить, Shift+Enter — новая строка</span><button id="send" type="submit">Отправить ↗</button></div>
+  </form><div id="error" class="error" role="alert" hidden></div><div class="notice">Маршруты приблизительные; проверяй актуальные часы работы, цены и доступность мест.</div></div>
+ </main>
+</div>
+<script src="/static/route_format.js" defer></script>
+<script src="/static/app.js" defer></script></body></html>

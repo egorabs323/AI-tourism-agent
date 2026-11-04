@@ -1,0 +1,50 @@
+/* Pure text parser. Does not interpret model output as HTML. */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  root.TravelRouteFormat = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  function normalizeLine(line) { return line.trim().replace(/^\*\*(.*?)\*\*$/, '$1'); }
+  function parseAnswer(text) {
+    const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+    const clean = [];
+    let inSources = false;
+    let note = '';
+    for (const raw of lines) {
+      const line = normalizeLine(raw);
+      if (/^Источники\s*[:：]\s*$/i.test(line)) { inSources = true; continue; }
+      if (inSources) {
+        if (/^Группировка по координатам/i.test(line) || /^Порядок остановок/i.test(line)) {
+          note = line; inSources = false;
+        }
+        continue;
+      }
+      if (/^Группировка по координатам/i.test(line) || /^Порядок остановок/i.test(line)) {
+        note = line; continue;
+      }
+      clean.push(line);
+    }
+    const days = [];
+    let day = null;
+    let preface = [];
+    let other = [];
+    for (const line of clean) {
+      const header = line.match(/^#{0,3}\s*День\s+(\d+)(?:\s*[:—-]\s*(.*))?\s*$/i);
+      if (header) {
+        day = { number: Number(header[1]), title: header[2] || '', stops: [] };
+        days.push(day);
+        continue;
+      }
+      const item = line.match(/^(?:[-*]\s*)?(\d+)[.)]\s+(.+?)\s*\[Источник\s*(\d+)\](?:\s*[—–-]\s*(.*))?\s*$/i);
+      if (day && item) {
+        day.stops.push({ number: Number(item[1]), name: item[2].replace(/^\*\*|\*\*$/g, '').trim(), source: Number(item[3]), description: (item[4] || '').trim() });
+        continue;
+      }
+      if (line) (day ? other : preface).push(line);
+    }
+    const route = days.length > 0 && days.some(d => d.stops.length > 0) && other.length === 0;
+    return { kind: route ? 'route' : 'text', days, note,
+      text: clean.join('\n').trim(), preface: preface.join(' ') };
+  }
+  return { parseAnswer };
+});
