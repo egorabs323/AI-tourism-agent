@@ -15,13 +15,21 @@ STOP = re.compile(r'^(\s*\d+[.)]\s+)(.+?)\s+\[Источник\s*(\d+)\](?:\s*[�
 SOURCE = re.compile(r'^Источники:\s*$')
 NOTE = re.compile(r'^(?:Группировка по координатам|Географическая группировка|Порядок остановок)')
 FALLBACK = 'В найденных фрагментах нет достаточно точного описания этого объекта.'
-CACHE_VERSION = 'grounded-v6'
+CACHE_VERSION = 'grounded-v8'
 _INVALID = re.compile(r'^(?:одно предложение|описание|пример|текст|нет данных|не указано|one sentence|description|short description)[.!\s]*$', re.I)
 _HOURS = re.compile(r'\b(?:open|opening|hours?|closed|daily|tickets?|admission|price|cost|€|\$|am|pm)\b|\b\d{1,2}:\d{2}\b', re.I)
 _SPATIAL = re.compile(r'^(?:near|nearby|opposite|next to|around|behind|beside)\b', re.I)
 _UNRELATED = re.compile(r'\b(?:pub\s+crawl|pub\s+tour|bar\s+crawl|walking\s+tour|tour\s+operator|hotel|hostel|restaurant|cafe|nightclub|souvenir\s+shop|ticket\s+office)\b', re.I)
 _SCRIPTS = re.compile(r'[\u3400-\u9fff\u3040-\u30ff]')
 
+
+_ABBREVIATIONS = re.compile(r'\b(?:St|Mr|Mrs|Dr|Prof|vs)\.', re.I)
+
+def _protect_abbreviations(text):
+    return _ABBREVIATIONS.sub(lambda m: m.group().replace('.', '<DOT>'), text)
+
+def _restore_abbreviations(text):
+    return text.replace('<DOT>', '.')
 
 def _clean(text):
     return ' '.join(str(text or '').split())
@@ -34,8 +42,8 @@ def _sentences(text):
         if not line:
             continue
         # Wikivoyage often has listing headings and prose on one line.
-        for piece in re.split(r'(?<=[.!?])\s+(?=[A-Z\"“(])', line):
-            piece = piece.strip(' -•\t')
+        for piece in re.split(r'(?<=[.!?])\s+(?=[A-Z\"“(])', _protect_abbreviations(line)):
+            piece = _restore_abbreviations(piece).strip(' -•\t')
             if piece:
                 yield piece
 
@@ -45,40 +53,83 @@ def _name_hit(sentence, name):
 
 
 def _evidence_sentence(text, name):
-    """Select a source clause actually describing the named place.
+    """Extract a fact tied to the POI, including compact Wikivoyage listings.
 
-    Permit prose and Wikivoyage list entries; reject incidental mentions,
-    opening hours, and clauses that describe another attraction.
+    Wikivoyage headings can be followed by '*' address/photo metadata and then
+    'This church ...' or 'This massive ... fountain ...'. Treat such headings as
+    record boundaries, but never assume that any incidental name mention is a
+    description of that place.
     """
+    # Flattened Wikimedia captions can concatenate a filename directly to
+    # its landmark title, or put a new heading after a literal asterisk.
+    text = str(text or '')
+    text = re.sub(r'(' + re.escape(name) + r')(\d{1,3}\.(?:jpe?g|png|webp)\b)',
+                  r'\1 \2', text, flags=re.I)
+    text = re.sub(r'\*\s+(The\s+' + re.escape(name) + r'\s+(?:is|was|has)\b)',
+                  r'. \1', text, flags=re.I)
     ranked = []
     for clause in _sentences(text):
-        m = _name_hit(clause, name)
-        if not m:
+        match = _name_hit(clause, name)
+        if not match:
             continue
-        before = clause[:m.start()].strip(' \"“(•-')
+        before = clause[:match.start()].strip(' "“(•-')
         if len(before) > 36 or re.search(r'\b(?:near|of|from|beside|opposite|views? of|including|next to)\s*$', before, re.I):
             continue
         if before and not re.fullmatch(r'(?:The|Visit|See|Explore|Historic|Famous|A|An|In|At|This|The famous|The historic)\s*', before, re.I):
             continue
-        after = clause[m.end():].strip(' *,:;()—–-')
+        after = clause[match.end():].strip(' *,:;()—–-')
         if not after or _HOURS.search(clause) or _UNRELATED.search(clause) or len(after) < 18:
             continue
-        # A plain list entry may have an em dash or asterisks instead of 'is'.
-        verb = re.search(r'\b(?:is|was|are|were|has|have|houses|contains|features|built|dates|stands|located|known|designed|constructed|includes|served|became|remains|offers|comprises|opened|famous)\b', after[:190], re.I)
-        listing = bool(re.match(r'\s*(?:[—–:*]|\*)', clause[m.end():]))
-        if not verb and not listing:
+        verb = re.search(r'\b(?:is|was|are|were|has|have|houses|contains|features|built|dates|stands|located|known|designed|constructed|includes|served|became|remains|offers|comprises|opened|famous|measured)\b', after[:190], re.I)
+        if not verb:
             continue
-        if len(clause) > 370:
-            # Long flat articles can join two listings. Don't assign the entire
-            # following attraction to the current one.
-            clause = clause[:370].rsplit(' ', 1)[0]
+        clause = clause[:370].rsplit(' ', 1)[0] if len(clause) > 370 else clause
         if len(clause) < len(name) + 24:
             continue
-        # Favor an explicit definition, then a meaningful list description.
-        definition = bool(re.match(r'^\s*(?:is|was|are|were)\b', after, re.I))
-        # A list description without a verb is less reliable.
-        score = 0 if definition else (1 if verb else 3)
-        ranked.append((score, len(clause), clause))
+        score = _quality_score(clause, name)
+        if score >= 0:
+            ranked.append((-score, len(clause), clause))
+
+    # Listing form: 'NAME * [address] [image.jpg] This church ...' or
+    # 'NAME * Since 1871 ... . This 16th-century palace ...'. The subject of
+    # the follow-up clause is linked to the immediately preceding listing name.
+    for match in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', str(text), re.I):
+        tail = str(text)[match.end():match.end() + 440]
+        marker = re.match(r'\s*(?:\*|[–—:])', tail)
+        image = re.search(r'(?i)\b(?:jpe?g|png|webp)\b', tail[:110])
+        # Allow a filename directly appended to the name, as in
+        # 'San Pietro in Montorio2.JPG This church ...'.
+        image_after_heading = re.match(r'(?i)\s*\d*\.(?:jpe?g|png|webp)\b', tail)
+        if not (marker or image_after_heading):
+            continue
+        # Find a clearly anaphoric description (This church, This massive
+        # early-17th-century fountain, etc.) within the same listing.
+        safe_tail = _protect_abbreviations(tail[:430])
+        description = re.search(
+            r'(?i)\bThis\s+(?:(?:\w+[\-–]?[\w]*|\d+(?:st|nd|rd|th)?)\s+){0,6}'
+            r'(?:church|chapel|fountain|palace|building|museum|amphitheat(?:re|er)|temple)\b[^.!?]{16,235}[.!?]?',
+            safe_tail
+        )
+        if description:
+            sentence = _restore_abbreviations(_clean(description.group())).rstrip(' *')
+            # Ensure the sentence is about this listing, not another listed
+            # place. A bullet between the heading and description is fine only
+            # if it is the first separator immediately after the heading.
+            intermediate = tail[:description.start()]
+            if intermediate.count('*') > (1 if marker else 0):
+                continue
+            if _UNRELATED.search(sentence) or _HOURS.search(sentence):
+                continue
+            ranked.append((-16, len(sentence), sentence))
+        elif marker:
+            # A simple listing with one directly attached factual sentence.
+            # E.g. 'Palazzo Farnese * Since 1871 this has been the French
+            # Embassy.' Skip directions, prices and opening hours.
+            first = tail[marker.end():].strip()
+            first = re.split(r'(?<=[.!?])\s+', first, maxsplit=1)[0]
+            if re.match(r'(?i)(?:Since\s+\d{4}\b|Built\s+in\b)', first) and 35 <= len(first) <= 235 and not _HOURS.search(first):
+                ranked.append((-9, len(first), _clean(first)))
+
     if not ranked:
         return ''
     ranked.sort()
@@ -170,9 +221,13 @@ def _search_evidence(assistant, destination, names, max_candidates=32):
             passage = Passage(text=doc, title=meta.get('title', ''),
                               url=meta.get('url', ''), distance=float(distance),
                               chunk_id=cid)
-            matches.append((-quality, len(sentence), float(distance), passage, sentence))
+            # A neighborhood's dedicated Wikivoyage article is more useful than
+            # generic city mentions (including incidental tourism adverts).
+            article = (meta.get('title') or '')
+            dedicated = 1 if '/' in article else 0
+            matches.append((-quality, -dedicated, len(sentence), float(distance), passage, sentence))
         matches.sort(key=lambda row: row[:3])
-        return (matches[0][3], matches[0][4]) if matches else None
+        return (matches[0][4], matches[0][5]) if matches else None
 
     for name in names:
         rows = _lexical_candidates(assistant.collection, where, name)
@@ -215,8 +270,27 @@ def _translation_valid(value, evidence, name):
     numbers_in_source = set(re.findall(r'(?<!\w)\d+(?!\w)', evidence))
     if any(number not in numbers_in_source for number in re.findall(r'(?<!\w)\d+(?!\w)', value)):
         return ''
-    # Basic semantic type consistency for high-impact class changes.
+    # A small model can change key terms while producing fluent Russian.
+    # Reject translations whose central architectural term is incompatible.
     e = evidence.lower()
+    mandatory_terms = (
+        (r'\bdome\b', r'\bкупол\w*'),
+        (r'\bfresco(?:es|s)?\b', r'\bфреск\w*'),
+        (r'\bfountain\b', r'\bфонтан\w*'),
+        (r'\bchapel\b', r'\bкапелл\w*|\bчасовн\w*'),
+        (r'\bpalace\b', r'\bдвор\w*|\bпалацц\w*'),
+    )
+    for english, russian in mandatory_terms:
+        if re.search(english, e) and not re.search(russian, low):
+            return ''
+    if 'sistine chapel' in name.casefold() and not re.search(r'сикстинск', low):
+        return ''
+    # Partial or cut-off generations should not be presented as verified facts.
+    if not re.search(r'[.!?…]$', value):
+        return ''
+    if re.search(r'\b(?:святой|святого|святом|по|в|на|и|для|к)\s*[.!?…]?$', low):
+        return ''
+    # Basic semantic type consistency for high-impact class changes.
     if re.search(r'\bchapel\b', e) and re.search(r'\bсобор\b', low) and not re.search(r'\bcathedral\b', e):
         return ''
     if re.search(r'\btemple\b', e) and re.search(r'\bбассейн\b', low) and not re.search(r'\bpool\b', e):
