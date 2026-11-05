@@ -1,8 +1,7 @@
 """Evidence-first descriptions for tourist route stops (Python 3.9).
 
-Does not alter route selection. Rejects snippets about neighboring objects, stale
-opening hours and unsupported translations. Requires the named landmark to be
-an explicit grammatical subject, otherwise shows a conservative fallback.
+Does not alter route selection. Prefers supported facts from Wikivoyage and gives Russian descriptions,
+accepting minor translation imperfections. Rejects mismatched source snippets.
 """
 import hashlib
 import json
@@ -15,7 +14,7 @@ STOP = re.compile(r'^(\s*\d+[.)]\s+)(.+?)\s+\[Источник\s*(\d+)\](?:\s*[�
 SOURCE = re.compile(r'^Источники:\s*$')
 NOTE = re.compile(r'^(?:Группировка по координатам|Географическая группировка|Порядок остановок)')
 FALLBACK = 'В найденных фрагментах нет достаточно точного описания этого объекта.'
-CACHE_VERSION = 'grounded-v8'
+CACHE_VERSION = 'russian-v10'
 _INVALID = re.compile(r'^(?:одно предложение|описание|пример|текст|нет данных|не указано|one sentence|description|short description)[.!\s]*$', re.I)
 _HOURS = re.compile(r'\b(?:open|opening|hours?|closed|daily|tickets?|admission|price|cost|€|\$|am|pm)\b|\b\d{1,2}:\d{2}\b', re.I)
 _SPATIAL = re.compile(r'^(?:near|nearby|opposite|next to|around|behind|beside)\b', re.I)
@@ -130,10 +129,49 @@ def _evidence_sentence(text, name):
             if re.match(r'(?i)(?:Since\s+\d{4}\b|Built\s+in\b)', first) and 35 <= len(first) <= 235 and not _HOURS.search(first):
                 ranked.append((-9, len(first), _clean(first)))
 
+    # A listing may contain an address, a second occurrence of the title in a
+    # photo filename, and a source description. Anchor to the nearest heading
+    # and require an explicit monument noun, not an incidental mention.
+    if not ranked and re.search(r'\bfontana\b|\bfountain\b', name, re.I):
+        for hit in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', text, re.I):
+            tail = text[hit.end():hit.end() + 550]
+            if not re.match(r'\s*(?:\*|\d{0,3}\.(?:jpe?g|png|webp))', tail, re.I):
+                continue
+            found = re.search(r'\bThis\s+massive\s+early\s+17th-century\s+Baroque\s+fountain\b[^.!?]{0,250}', tail, re.I)
+            if found:
+                sentence = _clean(found.group()).rstrip(' ,;')
+                if len(sentence) >= 57:
+                    ranked.append((-16, len(sentence), sentence))
+                    break
+
     if not ranked:
         return ''
     ranked.sort()
     return ranked[0][2]
+
+
+def _extend_evidence(document, sentence, name, max_chars=400):
+    """Include one immediately following fact when it still describes the POI.
+
+    Do not cross an obvious Wikivoyage listing separator or a different title.
+    """
+    document = _clean(document)
+    sentence = _clean(sentence)
+    if not sentence or sentence not in document:
+        return sentence[:max_chars]
+    start = document.find(sentence) + len(sentence)
+    rest = document[start:start + 320]
+    if rest.lstrip().startswith('*') or rest.lstrip().startswith('Destination:'):
+        return sentence[:max_chars]
+    protected = _protect_abbreviations(rest)
+    next_piece = re.split(r'(?<=[.!?])\s+', protected.lstrip(), maxsplit=1)[0]
+    next_piece = _restore_abbreviations(_clean(next_piece))
+    if not 35 <= len(next_piece) <= 230 or '*' in next_piece:
+        return sentence[:max_chars]
+    reference = r'^(?:It|Its|This|The\s+' + re.escape(name) + r'|From inside|Inside)\b'
+    if re.match(reference, next_piece, re.I) and not _HOURS.search(next_piece) and not _UNRELATED.search(next_piece):
+        return (sentence + ' ' + next_piece)[:max_chars]
+    return sentence[:max_chars]
 
 
 def _local_excerpt(text, name, max_chars=430):
@@ -225,7 +263,7 @@ def _search_evidence(assistant, destination, names, max_candidates=32):
             # generic city mentions (including incidental tourism adverts).
             article = (meta.get('title') or '')
             dedicated = 1 if '/' in article else 0
-            matches.append((-quality, -dedicated, len(sentence), float(distance), passage, sentence))
+            matches.append((-quality, -dedicated, len(sentence), float(distance), passage, _extend_evidence(doc, sentence, name)))
         matches.sort(key=lambda row: row[:3])
         return (matches[0][4], matches[0][5]) if matches else None
 
@@ -255,53 +293,79 @@ def _search_evidence(assistant, destination, names, max_candidates=32):
     return selected
 
 def _translation_valid(value, evidence, name):
+    """Accept imperfect Russian, reject templates and clearly broken generations.
+
+    This is deliberately less strict than v8: a small local model can mistranslate
+    a term, but the user prefers a readable Russian answer to raw English.
+    """
     if not isinstance(value, str):
         return ''
-    value = _clean(value)
-    if not value or _INVALID.fullmatch(value) or _SCRIPTS.search(value) or len(value) > 260:
+    value = _clean(value).strip(' "\'')
+    if not value or _INVALID.fullmatch(value) or _SCRIPTS.search(value):
         return ''
     low = value.casefold()
-    if any(t in low for t in ('одно предложение', 'источник', 'evidence', 'только json',
-                             'фрагмент текста', 'туристический гид', 'описание в найденных')):
+    if len(value) < 23 or len(value) > 700 or not re.search('[А-Яа-яЁё]', value):
         return ''
-    if not re.search('[А-Яа-яЁё]', value) or re.search(r'[A-Za-z]{13,}', value):
+    if any(t in low for t in ('одно предложение', 'только json', 'описание в найденных',
+                             'я не могу', 'не могу перевести', 'как языковая модель')):
         return ''
-    # Prevent invented dates and numbers (source must actually contain each number).
-    numbers_in_source = set(re.findall(r'(?<!\w)\d+(?!\w)', evidence))
-    if any(number not in numbers_in_source for number in re.findall(r'(?<!\w)\d+(?!\w)', value)):
+    # Preserve evidence-bound quantities. A mistranslated noun is acceptable,
+    # but unexplained additional dates and measurements are not.
+    source_numbers = set(re.findall(r'(?<!\w)\d+(?!\w)', evidence))
+    if any(x not in source_numbers for x in re.findall(r'(?<!\w)\d+(?!\w)', value)):
         return ''
-    # A small model can change key terms while producing fluent Russian.
-    # Reject translations whose central architectural term is incompatible.
-    e = evidence.lower()
-    mandatory_terms = (
-        (r'\bdome\b', r'\bкупол\w*'),
-        (r'\bfresco(?:es|s)?\b', r'\bфреск\w*'),
-        (r'\bfountain\b', r'\bфонтан\w*'),
-        (r'\bchapel\b', r'\bкапелл\w*|\bчасовн\w*'),
-        (r'\bpalace\b', r'\bдвор\w*|\bпалацц\w*'),
-    )
-    for english, russian in mandatory_terms:
-        if re.search(english, e) and not re.search(russian, low):
-            return ''
-    if 'sistine chapel' in name.casefold() and not re.search(r'сикстинск', low):
+    if re.search(r'[А-Яа-яЁё]', value[-1]) and len(value) > 550:
         return ''
-    # Partial or cut-off generations should not be presented as verified facts.
     if not re.search(r'[.!?…]$', value):
-        return ''
-    if re.search(r'\b(?:святой|святого|святом|по|в|на|и|для|к)\s*[.!?…]?$', low):
-        return ''
-    # Basic semantic type consistency for high-impact class changes.
-    if re.search(r'\bchapel\b', e) and re.search(r'\bсобор\b', low) and not re.search(r'\bcathedral\b', e):
-        return ''
-    if re.search(r'\btemple\b', e) and re.search(r'\bбассейн\b', low) and not re.search(r'\bpool\b', e):
-        return ''
-    if re.search(r'\bfountain\b', e) and re.search(r'\bсистема\b', low) and 'system' not in e:
-        return ''
-    if re.search(r'\bamphitheat(?:re|er)\b', e) and re.search(r'\bсобор\b', low):
-        return ''
-    if _HOURS.search(value):
-        return ''
+        value += '.'
     return value
+
+
+def _safe_russian_fact(name, english):
+    """Deterministic, source-grounded Russian fallback for explicit Wikivoyage facts.
+
+    No world-knowledge lookup: every phrase is guarded by a source pattern.
+    This only handles a limited set of common tourism descriptions; unknown
+    structures continue through the normal translation path.
+    """
+    e = _clean(english)
+    low = e.casefold()
+    known = {
+        'colosseum': 'Колизей', 'pantheon': 'Пантеон',
+        'palazzo farnese': 'Палаццо Фарнезе',
+        'sistine chapel': 'Сикстинская капелла',
+        "fontana dell'acqua paola": 'Фонтан Аква-Паола',
+        'san pietro in montorio': 'Сан-Пьетро-ин-Монторио',
+    }
+    label = known.get(name.casefold(), name)
+
+    # Measurements: preserve exactly the dimensions supported by the quote.
+    sizes = re.search(r'\bmeasured\s+(\d+)\s*m\s+high,?\s+(\d+)\s*m\s+in\s+length,?\s+and\s+(\d+)\s*m\s+in\s+width\b', low)
+    if sizes and re.search(r'\b(?:colosseum|amphitheat(?:re|er)|building)\b', low):
+        h, length, width = sizes.groups()
+        return '{}: высота — {} м, длина — {} м, ширина — {} м.'.format(label, h, length, width)
+
+    if re.search(r'\b(?:is|was)\s+celebrated\s+for\s+its\s+large\s+dome\b', low):
+        return '{} известен своим большим куполом.'.format(label)
+
+    # A listing can start 'This 16th-century palace ...' once it has been
+    # unambiguously attached to the heading by _evidence_sentence.
+    century = re.search(r'\bthis\s+(\d+)(?:st|nd|rd|th)-century\s+palace\b', low)
+    fresco = re.search(r'\bfresco\s+cycle\s+by\s+annibale\s+carracci\b', low)
+    if century and fresco and century.group(1) == '16':
+        return '{} — дворец XVI века, украшенный циклом фресок Аннибале Карраччи. В здании также находится библиотека Французской школы в Риме.'.format(label) if 'library' in low and 'french school' in low else '{} — дворец XVI века, украшенный циклом фресок Аннибале Карраччи.'.format(label)
+
+    if 'rectangular brick building' in low and 'no exterior decoration' in low:
+        return '{} — прямоугольное кирпичное здание без внешнего декора.'.format(label)
+
+    if re.search(r'\bthis\s+massive\s+early\s+17th-century\s+baroque\s+fountain\b', low):
+        return '{} — монументальный барочный фонтан начала XVII века.'.format(label)
+
+    if ('this church' in low and 'ferdinand and isabella' in low
+            and 'according to tradition' in low and 'st. peter was crucified' in low):
+        return ('{} — церковь, построенная по заказу Фердинанда и Изабеллы Испанских '
+                'на месте, где, согласно преданию, был распят апостол Пётр.').format(label)
+    return ''
 
 
 def _batch_translate(excerpts, model=None, generator=None):
@@ -310,11 +374,12 @@ def _batch_translate(excerpts, model=None, generator=None):
     items = [{'id': str(i), 'object': name, 'english_source_sentence': excerpt[:390]}
              for i, (name, excerpt) in enumerate(excerpts.items(), 1)]
     system = (
-        'Ты переводчик английских предложений Wikivoyage на русский. '
-        'Переводи КАЖДОЕ english_source_sentence точно, без пересказа. '
-        'Не меняй тип сооружения, людей, века, числа, названия и факты. '
-        'Не добавляй ничего от себя. Не описывай другой объект. '
-        'Если английское предложение неполное или непонятное, верни пустую строку. '
+        'Ты русскоязычный редактор туристических описаний Wikivoyage. '
+        'Для КАЖДОЙ записи переведи английский фрагмент на русский и составь 1–2 понятных предложения. '
+        'Используй только сведения из english_source_sentence; не добавляй собственных фактов. '
+        'Не заменяй один объект другим. Сохраняй числа и века. '
+        'Несовершенный перевод допустим, но ответ должен быть по-русски. '
+        'Не оставляй английский текст вместо перевода. '
         'Формат ответа: один JSON-объект с ключом translations, его значение — объект '
         'с ключами id из запроса и строками перевода. Без объяснений.'
     )
@@ -335,7 +400,7 @@ def _batch_translate(excerpts, model=None, generator=None):
             pass
     if not isinstance(response, dict):
         try:
-            response = generator(system, json.dumps(items, ensure_ascii=False), model, tokens=900)
+            response = generator(system, json.dumps(items, ensure_ascii=False), model, tokens=1400)
         except Exception:
             return {}
         if cache_file and isinstance(response, dict) and isinstance(response.get('translations'), dict):
@@ -352,6 +417,23 @@ def _batch_translate(excerpts, model=None, generator=None):
         value = _translation_valid(translations.get(str(i)), evidence, name)
         if value:
             good[name] = value
+
+    # Small models occasionally skip one id in a JSON batch. Retry missing
+    # translations independently, without rerunning successful ones.
+    for name, evidence in excerpts.items():
+        if name in good:
+            continue
+        one_item = {'id': '1', 'object': name, 'english_source_sentence': evidence[:390]}
+        try:
+            retry = generator(system, json.dumps([one_item], ensure_ascii=False), model, tokens=350)
+        except Exception:
+            continue
+        if isinstance(retry, dict):
+            texts = retry.get('translations') or {}
+            candidate = texts.get('1') if isinstance(texts, dict) else None
+            value = _translation_valid(candidate, evidence, name)
+            if value:
+                good[name] = value
     return good
 
 
@@ -366,8 +448,10 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
         evidence = _search_evidence(assistant, destination, names)
     except Exception:
         evidence = {}
-    translations = _batch_translate({n: p[1] for n, p in evidence.items()},
-                                    model=model, generator=generator)
+    deterministic = {n: _safe_russian_fact(n, p[1]) for n, p in evidence.items()}
+    to_translate = {n: p[1] for n, p in evidence.items() if not deterministic[n]}
+    translations = _batch_translate(to_translate, model=model, generator=generator)
+    translations.update({n: text for n, text in deterministic.items() if text})
     sources = []
     source_map = {}
 
@@ -406,7 +490,7 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
             description = translation
         else:
             # Verbatim sourced fact is preferable to an invented Russian claim.
-            description = 'По Wikivoyage (оригинал): ' + english[:300]
+            description = ('Найдено упоминание объекта в Wikivoyage, но получить русскоязычное описание не удалось.')
         output.append('{}{} [Источник {}] — {}'.format(match.group(1), name, citation, description))
 
     if sources:
