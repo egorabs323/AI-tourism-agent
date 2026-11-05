@@ -50,8 +50,10 @@ function renderRoute(parsed) {
     for (const stop of day.stops) {
       const item=document.createElement('li');item.className='stop';
       const name=document.createElement('div');name.className='stop-title';name.textContent=stop.name;
-      const ref=document.createElement('span');ref.className='source-ref';ref.textContent=`Источник ${stop.source}`;
-      const line=document.createElement('div');line.className='stop-line';line.append(name,ref);
+      const line=document.createElement('div');line.className='stop-line';line.append(name);
+      if (stop.source) {
+        const ref=document.createElement('span');ref.className='source-ref';ref.textContent=`Источник ${stop.source}`;line.append(ref);
+      }
       item.append(line);
       if (stop.description) {
         const description=document.createElement('p');description.className='stop-description';description.textContent=stop.description;

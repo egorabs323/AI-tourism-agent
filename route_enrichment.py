@@ -14,7 +14,7 @@ STOP = re.compile(r'^(\s*\d+[.)]\s+)(.+?)\s+\[Источник\s*(\d+)\](?:\s*[�
 SOURCE = re.compile(r'^Источники:\s*$')
 NOTE = re.compile(r'^(?:Группировка по координатам|Географическая группировка|Порядок остановок)')
 FALLBACK = 'В найденных фрагментах нет достаточно точного описания этого объекта.'
-CACHE_VERSION = 'russian-v10'
+CACHE_VERSION = 'russian-v11'
 _INVALID = re.compile(r'^(?:одно предложение|описание|пример|текст|нет данных|не указано|one sentence|description|short description)[.!\s]*$', re.I)
 _HOURS = re.compile(r'\b(?:open|opening|hours?|closed|daily|tickets?|admission|price|cost|€|\$|am|pm)\b|\b\d{1,2}:\d{2}\b', re.I)
 _SPATIAL = re.compile(r'^(?:near|nearby|opposite|next to|around|behind|beside)\b', re.I)
@@ -235,6 +235,73 @@ def _lexical_candidates(collection, where, name, limit=90):
     return rows
 
 
+def _name_variants(name):
+    """Common typographical variants, not city-specific curated attractions."""
+    variants = [name]
+    if ' ' in name:
+        variants.append(name.replace(' ', '-'))
+    if '-' in name:
+        variants.append(name.replace('-', ' '))
+    if name.casefold().startswith('notre dame'):
+        variants.extend(['Notre-Dame', 'Notre Dame'])
+    return list(dict.fromkeys(variants))
+
+
+def _relaxed_listing_evidence(document, name):
+    """Find a nearby descriptive sentence for compact Wikivoyage listings.
+
+    Used only if the strict evidence parser cannot find an attributed fact.
+    Reject hotel/restaurant and unrelated-advertisement chunks.
+    """
+    text = _clean(document)
+    candidates = []
+    for variant in _name_variants(name):
+        for hit in list(re.finditer(r'(?<!\w)' + re.escape(variant) + r'(?!\w)', text, re.I))[:12]:
+            following = text[hit.end():hit.end() + 520]
+            # A listing may include a thumbnail and an address before the prose.
+            following = re.sub(r'^\s*(?:\*\s*)?(?:[^.!?]{0,80}?\.(?:jpe?g|png|webp)\s*)', ' ', following, flags=re.I)
+            pieces = re.split(r'(?<=[.!?])\s+(?=[A-Z])', _protect_abbreviations(following))
+            for piece in pieces[:3]:
+                piece = _restore_abbreviations(_clean(piece)).strip(' *,:;—–-')
+                if len(piece) < 48 or len(piece) > 360:
+                    continue
+                if _HOURS.search(piece) or _UNRELATED.search(piece):
+                    continue
+                if re.search(r'\b(?:hotel|restaurant|pub|cafe|hostel|apartments|souvenir)\b', piece, re.I):
+                    continue
+                # Require a physical attraction or clear descriptive wording.
+                if not re.search(r'\b(?:is|was|has|houses|contains|built|constructed|designed|'
+                                 r'century|historic|famous|iconic|museum|cathedral|church|'
+                                 r'palace|tower|arch|chapel|fresco|architecture|river|'
+                                 r'painting|monument|attraction|Gothic|medieval)\b', piece, re.I):
+                    continue
+                score = (5 if re.search(r'\b(?:is|was|built|constructed|designed|'
+                          r'century|famous|iconic|historic|Gothic|fresco)\b', piece, re.I) else 0)
+                score += min(len(piece), 200) / 100
+                candidates.append((score, piece))
+    if not candidates:
+        return ''
+    candidates.sort(key=lambda x: -x[0])
+    return candidates[0][1]
+
+
+def _minimal_russian_description(name, city):
+    """Conservative sourced fallback: type derived from name, no invented details."""
+    lower = name.casefold()
+    parts = {
+        'tower': 'башня', 'cathedral': 'собор', 'notre dame': 'собор',
+        'chapel': 'капелла', 'museum': 'музей', 'musée': 'музей',
+        'bridge': 'мост', 'pont ': 'мост', 'palace': 'дворец',
+        'palazzo': 'дворец', 'arc de triomphe': 'триумфальная арка',
+        'arch': 'арка', 'church': 'церковь', 'basilica': 'базилика',
+        'garden': 'сад', 'park': 'парк', 'fontana': 'фонтан',
+        'fountain': 'фонтан', 'gallery': 'галерея', 'louvre': 'музей',
+    }
+    kind = next((v for k, v in parts.items() if k in lower), 'достопримечательность')
+    # Specific facts are not inferred from the name; this is explicitly general.
+    return '{} — {} в городе {}, упомянутая в путеводителе Wikivoyage.'.format(name, kind, city)
+
+
 def _search_evidence(assistant, destination, names, max_candidates=32):
     """Exact phrase lookup first, then vector search for remaining stops."""
     if not names:
@@ -267,9 +334,29 @@ def _search_evidence(assistant, destination, names, max_candidates=32):
         matches.sort(key=lambda row: row[:3])
         return (matches[0][4], matches[0][5]) if matches else None
 
+    def relaxed_from_rows(name, rows):
+        matches = []
+        for cid, doc, meta, distance in rows:
+            if not isinstance(doc, str):
+                continue
+            excerpt = _relaxed_listing_evidence(doc, name)
+            if not excerpt:
+                continue
+            article = str((meta or {}).get('title') or '')
+            dedicated = 1 if '/' in article else 0
+            matches.append((-dedicated, -len(excerpt), Passage(
+                text=doc, title=article, url=(meta or {}).get('url', ''),
+                distance=float(distance), chunk_id=cid), excerpt))
+        matches.sort(key=lambda item: item[:2])
+        return (matches[0][2], matches[0][3]) if matches else None
+
     for name in names:
-        rows = _lexical_candidates(assistant.collection, where, name)
+        rows = []
+        for variant in _name_variants(name):
+            rows.extend(_lexical_candidates(assistant.collection, where, variant))
         match = best_from_rows(name, rows)
+        if not match:
+            match = relaxed_from_rows(name, rows)
         if match:
             selected[name] = match
 
@@ -287,7 +374,7 @@ def _search_evidence(assistant, destination, names, max_candidates=32):
     for i, name in enumerate(missing):
         rows = list(zip(results['ids'][i], results['documents'][i],
                         results['metadatas'][i], results['distances'][i]))
-        match = best_from_rows(name, rows)
+        match = best_from_rows(name, rows) or relaxed_from_rows(name, rows)
         if match:
             selected[name] = match
     return selected
@@ -480,8 +567,16 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
         name = match.group(2).strip()
         found = evidence.get(name)
         if not found:
-            # Never reuse potentially incorrect original generated descriptions.
-            output.append('{}{} — {}'.format(match.group(1), name, FALLBACK))
+            # The route selector already verified the literal name in its source.
+            # Keep that source when it is still available in the input passages.
+            initial_idx = int(match.group(3))
+            initial = passages[initial_idx - 1] if 1 <= initial_idx <= len(passages) else None
+            description = _minimal_russian_description(name, destination)
+            if initial and name.casefold() in initial.text.casefold():
+                output.append('{}{} [Источник {}] — {}'.format(
+                    match.group(1), name, cite(initial), description))
+            else:
+                output.append('{}{} — {}'.format(match.group(1), name, description))
             continue
         passage, english = found
         citation = cite(passage)
@@ -490,7 +585,7 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
             description = translation
         else:
             # Verbatim sourced fact is preferable to an invented Russian claim.
-            description = ('Найдено упоминание объекта в Wikivoyage, но получить русскоязычное описание не удалось.')
+            description = _minimal_russian_description(name, destination)
         output.append('{}{} [Источник {}] — {}'.format(match.group(1), name, citation, description))
 
     if sources:
