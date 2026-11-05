@@ -15,6 +15,8 @@ class WebAppTests(unittest.TestCase):
                  patch.object(web_app, 'DATA', Path(folder)), \
                  patch.object(web_app, 'LOG', Path(folder) / 'log.jsonl'):
                 with TestClient(web_app.app) as client:
+                    self.assertEqual(client.post('/api/auth/register', json={
+                        'username': 'webtest', 'password': 'web-test-password'}).status_code, 201)
                     res = client.post('/api/conversations', json={})
                     self.assertEqual(res.status_code, 201)
                     cid = res.json()['id']

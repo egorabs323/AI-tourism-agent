@@ -5,13 +5,6 @@ import types
 import unittest
 from pathlib import Path
 
-# Для изолированных тестов извлечения содержимого не нужна тяжёлая RAG-модель.
-if 'rag_pipeline' not in sys.modules:
-    import collections
-    m = types.ModuleType('rag_pipeline')
-    m.Passage = collections.namedtuple('Passage', 'text title url distance chunk_id')
-    sys.modules['rag_pipeline'] = m
-
 from user_documents import extract_text, split_text, MAX_CHUNKS
 
 

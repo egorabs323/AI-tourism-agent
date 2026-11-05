@@ -8,11 +8,80 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
+import threading
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from build_vector_db import MODEL_NAME, COLLECTION, create_collection
+from build_vector_db import MODEL_NAME, create_collection
+
+
+class ArticleStore:
+    """Byte offsets, not a second copy of the corpus or a vector index.
+
+    The JSONL is streamed once when its size/mtime changes. Subsequent reads
+    seek only the requested city's articles. No user database is touched.
+    """
+    _lock = threading.Lock()
+
+    def __init__(self, path: Path, cache: Path = Path('data/cache/article_offsets.sqlite3')):
+        self.path = Path(path).resolve()
+        self.cache = Path(cache)
+
+    def _connect(self):
+        stat = self.path.stat()
+        signature = json.dumps([str(self.path), stat.st_size, stat.st_mtime_ns])
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            db = sqlite3.connect(str(self.cache))
+            try:
+                db.execute('CREATE TABLE IF NOT EXISTS fingerprint (value TEXT)')
+                current = db.execute('SELECT value FROM fingerprint').fetchone()
+                if not current or current[0] != signature:
+                    with db:
+                        db.execute('DROP TABLE IF EXISTS articles')
+                        db.execute('CREATE TABLE articles (title TEXT PRIMARY KEY, offset INTEGER, size INTEGER)')
+                        with self.path.open('rb') as source:
+                            while True:
+                                offset = source.tell()
+                                line = source.readline()
+                                if not line:
+                                    break
+                                if line.strip():
+                                    row = json.loads(line)
+                                    db.execute('INSERT OR REPLACE INTO articles VALUES (?, ?, ?)',
+                                               (row['title'], offset, len(line)))
+                        db.execute('DELETE FROM fingerprint')
+                        db.execute('INSERT INTO fingerprint VALUES (?)', (signature,))
+                    self._read_city.cache_clear()
+            except Exception:
+                db.close()
+                raise
+        return db
+
+    def city(self, destination: str) -> tuple:
+        stat = self.path.stat()
+        return self._read_city(destination, stat.st_size, stat.st_mtime_ns)
+
+    @lru_cache(maxsize=3)
+    def _read_city(self, destination: str, size: int, mtime: int) -> tuple:
+        db = self._connect()
+        try:
+            rows = db.execute('SELECT title, offset, size FROM articles WHERE title=? OR '
+                              '(title>=? AND title<?) ORDER BY title',
+                              (destination, destination + '/', destination + '0')).fetchall()
+        finally:
+            db.close()
+        result = []
+        with self.path.open('rb') as source:
+            for title, offset, length in rows:
+                source.seek(offset)
+                row = json.loads(source.read(length))
+                result.append(Passage(row.get('structured_text') or row['text'], title,
+                                      row['url'], 0.0, 'article:' + str(row['article_id'])))
+        return tuple(result)
 
 # Словарь только помогает находить destination. Не подменяет базу знаний.
 # Неоднозначные топонимы (например, Georgia) лучше передавать через --destination.
@@ -63,7 +132,6 @@ def resolve_title(destination: str, titles: set) -> Optional[str]:
 
 
 def detect_destination(question: str, titles: set) -> Optional[str]:
-    words = re.findall(r"[\w-]+", question.casefold(), flags=re.UNICODE)
     lowered = question.casefold()
     # Ищем длинные выражения в первую очередь, чтобы не спутать город и страну.
     for alias in sorted(RUSSIAN_ALIASES, key=len, reverse=True):
@@ -105,11 +173,25 @@ class RagAssistant:
                  articles: Path = Path("data/processed/articles.jsonl"),
                  model_name: str = MODEL_NAME):
         self.titles = title_index(articles)
+        self.articles = ArticleStore(articles)
         self.collection = create_collection(db)
         if self.collection.count() == 0:
             raise ValueError("Коллекция ChromaDB пуста. Сначала выполни этап 2")
-        from sentence_transformers import SentenceTransformer
-        self.encoder = SentenceTransformer(model_name)
+        self._encoder = None
+        self._model_name = model_name
+
+    @property
+    def encoder(self):
+        # Route records do not need embeddings. Load E5 only for vector search
+        # or uploaded documents, leaving RAM available to the local LLM.
+        if self._encoder is None:
+            from sentence_transformers import SentenceTransformer
+            self._encoder = SentenceTransformer(self._model_name)
+        return self._encoder
+
+    @encoder.setter
+    def encoder(self, value):
+        self._encoder = value
 
     def retrieve(self, question: str, destination: Optional[str] = None,
                  top_k: int = 8) -> tuple[list, Optional[str]]:

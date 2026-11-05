@@ -22,6 +22,17 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def preserve_layout(value: str) -> str:
+    """Keep original paragraph/list boundaries for new article exports.
+
+    Embedding text/chunk IDs retain the existing normalization. Existing
+    articles and vectors do not need to be regenerated.
+    """
+    text = unicodedata.normalize('NFC', html.unescape(value or '')).replace('\u00a0', ' ')
+    return '\n'.join(re.sub(r'[^\S\n]+', ' ', line).strip()
+                     for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')).strip()
+
+
 def split_into_chunks(text: str, words_per_chunk: int = 220, overlap_words: int = 40) -> list[str]:
     """Фиксированный чанкинг по словам с перекрытием, без потери слов."""
     if words_per_chunk <= 0:
@@ -155,7 +166,8 @@ def prepare(
                 "snapshot": SOURCE_SNAPSHOT,
                 "license": LICENSE,
             }
-            article = {**metadata, "text": body, "length_chars": len(body)}
+            article = {**metadata, "text": body, "length_chars": len(body),
+                       "structured_text": preserve_layout(str(row.get('text') or ''))}
             write_jsonl_line(article_file, article)
             if len(titles_preview) < 10:
                 titles_preview.append(title)

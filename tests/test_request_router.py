@@ -1,24 +1,46 @@
+"""The explicit UI mode is authoritative; no obsolete request_router module."""
 import unittest
-from request_router import classify_request
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+import web_app
+from rag_pipeline import Passage
 
 
 class RouterTests(unittest.TestCase):
-    def test_route_planning(self):
-        self.assertEqual(classify_request('Составь туристический маршрут по Риму на два дня.'), 'route')
-        self.assertEqual(classify_request('Построй маршрут по Казани за 2 дня'), 'route')
-        self.assertEqual(classify_request('Предложи план поездки на выходные'), 'route')
+    def run_reply(self, mode, documents):
+        passage = Passage('Alpha Palace is a baroque palace built in 1700.', 'City',
+                          'https://en.wikivoyage.org/wiki/City', 0, 'article:1')
+        assistant = SimpleNamespace(titles={'City'}, articles=SimpleNamespace(city=Mock(return_value=(passage,))),
+                                    retrieve=Mock(return_value=([passage], 'City')))
+        with TemporaryDirectory() as folder, \
+             patch.object(web_app, 'HISTORY_DB', Path(folder) / 'history.sqlite3'), \
+             patch.object(web_app, 'get_assistant', return_value=assistant), \
+             patch.object(web_app, 'search_documents', return_value=documents), \
+             patch.object(web_app, 'answer_route', return_value='route') as route, \
+             patch.object(web_app, 'enrich_route_answer', return_value=('route', [passage])) as enrich, \
+             patch.object(web_app, 'answer_factual', return_value='reference') as factual:
+            web_app.generate_reply('test', 'City', 'City', 6, mode)
+        return assistant, route, enrich, factual
 
-    def test_ordinary_questions_do_not_trigger_route_builder(self):
-        self.assertEqual(classify_request('Где начинается маршрут «Лазурная тропа»?'), 'qa')
-        self.assertEqual(classify_request('А где он заканчивается?'), 'qa')
-        self.assertEqual(classify_request('Сколько времени занимает маршрут?'), 'qa')
-        self.assertEqual(classify_request('Какие главные достопримечательности есть в Риме?'), 'qa')
-        self.assertEqual(classify_request('Какие из них лучше посетить с детьми?'), 'qa')
-        self.assertEqual(classify_request('А какие из этих мест бесплатные?'), 'qa')
+    def test_route_reads_city_articles_without_vector_queries(self):
+        assistant, route, enrich, factual = self.run_reply('route', [])
+        assistant.retrieve.assert_not_called()
+        route.assert_called_once()
+        enrich.assert_called_once()
+        factual.assert_not_called()
 
-    def test_edits_are_not_new_route_creation(self):
-        self.assertEqual(classify_request('Измени маршрут так, чтобы в первый день были только исторические достопримечательности.'), 'route_edit')
-        self.assertEqual(classify_request('А теперь убери из первого дня музеи.'), 'route_edit')
+    def test_reference_mode_does_not_create_route(self):
+        assistant, route, enrich, factual = self.run_reply('reference', [])
+        assistant.retrieve.assert_called_once()
+        route.assert_not_called()
+        factual.assert_called_once()
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_uploaded_documents_still_use_document_answer(self):
+        assistant, route, enrich, factual = self.run_reply('route', [
+            Passage('User document text', 'Guide.txt', 'http://127.0.0.1/document', 0, 'doc_1')])
+        assistant.articles.city.assert_not_called()
+        assistant.retrieve.assert_not_called()
+        route.assert_not_called()
+        factual.assert_called_once()

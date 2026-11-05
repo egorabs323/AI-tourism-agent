@@ -122,6 +122,119 @@ def compare_cmd(args):
     print('Сохранено:',OUT/'comparison_to_rate.csv')
 
 
+def routes_cmd(args):
+    """Real local integration run; does not create users/conversations or vectors."""
+    import json
+    import re
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from rag_pipeline import ArticleStore
+    from structured_routes import answer_route, _ollama_json, object_facts
+    from route_enrichment import enrich_route_answer, STOP
+    from build_vector_db import create_collection
+
+    store = ArticleStore(Path('data/processed/articles.jsonl'))
+    collection = create_collection(Path('data/chroma'))
+    count_before = collection.count()
+    examples = [
+        ('Rome', 'Составь туристический маршрут по Риму на два дня с посещением главных исторических достопримечательностей', 2),
+        ('Paris', 'Составь туристический маршрут по Парижу на один день для первого знакомства с городом. Включи самые известные достопримечательности и кратко расскажи о каждой', 1),
+        ('London', 'Составь маршрут по Лондону на два дня для первого знакомства с городом. Включи основные исторические достопримечательности и кратко расскажи, чем интересно каждое место', 2),
+    ]
+    report = []
+    for city, question, days in examples:
+        if args.city and args.city != city:
+            continue
+        calls = []
+        def measured(system, user, model, tokens=700):
+            start = time.perf_counter()
+            result = _ollama_json(system, user, model, tokens)
+            calls.append({'seconds': round(time.perf_counter() - start, 3),
+                          'input_chars': len(system) + len(user), 'result': result})
+            return result
+        start = time.perf_counter()
+        print('Проверка:', city, flush=True)
+        passages = list(store.city(city))
+        with patch('structured_routes._ollama_json', side_effect=measured):
+            answer = answer_route(question, passages, city)
+            answer, sources = enrich_route_answer(answer, passages, SimpleNamespace(articles=store), city)
+        stops = [m for line in answer.splitlines() if (m := STOP.match(line))]
+        names = [m.group(2) for m in stops]
+        checks = {
+            'days': re.findall(r'^День (\d+)$', answer, re.M) == [str(i) for i in range(1, days + 1)],
+            'unique_stops': len(set(name.casefold() for name in names)) == len(names),
+            'russian_descriptions': bool(stops) and all(re.search('[А-Яа-яЁё]', m.group(4) or '') and
+                    'Не удалось перевести' not in m.group(4) for m in stops),
+            'source_ids': all(1 <= int(m.group(3)) <= len(sources) for m in stops),
+            'wiki_urls': all(p.url.startswith('https://en.wikivoyage.org/wiki/') for p in sources),
+            'object_evidence': all(any(object_facts(p.text, name) for p in passages) for name in names),
+            'required_landmarks': (all(n in names for n in ['Colosseum', 'Pantheon']) if city == 'Rome' else
+                                   all(any(n in name for name in names) for n in ['Eiffel Tower', 'Notre Dame', 'Arc de Triomphe']) if city == 'Paris' else
+                                   all(n in names for n in ['Tower Bridge', 'Buckingham Palace'])),
+            'regression_exclusions': not set(names).intersection({'Tube', 'St Pancras', 'Catholic Church', 'St. Peter'}),
+        }
+        row = {'city': city, 'seconds': round(time.perf_counter() - start, 3),
+               'article_count': len(passages), 'llm_calls': len(calls), 'checks': checks,
+               'answer': answer, 'calls': calls}
+        if args.http:
+            import tempfile
+            import web_app
+            from fastapi.testclient import TestClient
+            from rag_pipeline import RagAssistant
+            assistant = RagAssistant()
+            assistant.articles = store
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                with patch.object(web_app, 'DATA', root), \
+                     patch.object(web_app, 'HISTORY_DB', root / 'history.sqlite3'), \
+                     patch.object(web_app, 'UPLOADS', root / 'uploads'), \
+                     patch.object(web_app, 'LOG', root / 'requests.jsonl'), \
+                     patch.object(web_app, 'get_assistant', return_value=assistant), \
+                     patch.object(web_app, 'search_documents', return_value=[]), \
+                     patch('structured_routes._ollama_json', side_effect=AssertionError('warm cache called Ollama')):
+                    with TestClient(web_app.app) as api:
+                        registered = api.post('/api/auth/register', json={
+                            'username': 'route_validation', 'password': 'local-validation-password'})
+                        registered.raise_for_status()
+                        cid = api.post('/api/conversations', json={}).json()['id']
+                        warm_start = time.perf_counter()
+                        response = api.post('/api/conversations/' + cid + '/messages', json={
+                            'question': question, 'destination': city, 'mode': 'route', 'top_k': 6})
+                        response.raise_for_status()
+                        row['warm_http_seconds'] = round(time.perf_counter() - warm_start, 3)
+                        checks['http_answer'] = response.json()['answer'] == answer
+                        checks['http_sources'] = len(response.json()['sources']) == len(sources)
+                        checks['http_history'] = len(api.get('/api/conversations/' + cid + '/messages').json()) == 2
+                        checks['encoder_unloaded'] = assistant._encoder is None
+        if __import__('sys').platform == 'win32':
+            import ctypes
+            from ctypes import wintypes
+            class MemoryCounters(ctypes.Structure):
+                _fields_ = [('cb', wintypes.DWORD), ('faults', wintypes.DWORD)] + [
+                    (name, ctypes.c_size_t) for name in ['peak', 'working', 'pool_peak', 'pool',
+                                                        'nonpage_peak', 'nonpage', 'pagefile', 'pagefile_peak']]
+            counters = MemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            ctypes.windll.kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+            memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+            memory_info.argtypes = [wintypes.HANDLE, ctypes.POINTER(MemoryCounters), wintypes.DWORD]
+            memory_info.restype = wintypes.BOOL
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if memory_info(handle, ctypes.byref(counters), counters.cb):
+                row['python_peak_mb'] = round(counters.peak / 1024**2, 2)
+                row['python_working_mb'] = round(counters.working / 1024**2, 2)
+        report.append(row)
+        OUT.mkdir(parents=True, exist_ok=True)
+        (OUT / ('route_' + city.lower() + '.txt')).write_text(answer, encoding='utf-8')
+        (OUT / 'route_validation.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+        print(city, row['seconds'], 'seconds;', len(calls), 'LLM calls;', checks, flush=True)
+        print(answer, flush=True)
+    if collection.count() != count_before:
+        raise RuntimeError('Chroma count changed during read-only validation')
+    if not all(all(row['checks'].values()) for row in report):
+        raise SystemExit('Route validation failed; inspect data/evaluation/route_validation.json')
+
+
 def main():
     parser=argparse.ArgumentParser(description='Локальная оценка туристического RAG (Python 3.9+)')
     sub=parser.add_subparsers(dest='command',required=True)
@@ -137,6 +250,10 @@ def main():
     p.add_argument('--questions',type=int,default=2,choices=range(1,len(QUESTIONS)+1))
     p.add_argument('--k',type=int,default=5,choices=range(1,13))
     p.set_defaults(run=compare_cmd)
+    p=sub.add_parser('routes', help='Проверить реальные маршруты Rome/Paris/London с локальной Ollama')
+    p.add_argument('--city', choices=['Rome', 'Paris', 'London'])
+    p.add_argument('--http', action='store_true', help='Также проверить HTTP API и историю во временной SQLite')
+    p.set_defaults(run=routes_cmd)
     args=parser.parse_args()
     args.run(args)
 

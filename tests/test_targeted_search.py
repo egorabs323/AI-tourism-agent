@@ -6,16 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-fake = types.ModuleType('build_vector_db')
-fake.MODEL_NAME = 'unused'
-fake.COLLECTION = 'unused'
-fake.create_collection = lambda db: None
-sys.modules.setdefault('build_vector_db', fake)
-path = Path(__file__).resolve().parents[1] / 'rag_pipeline.py'
-spec = importlib.util.spec_from_file_location('rag_pipeline', path)
-module = importlib.util.module_from_spec(spec)
-sys.modules['rag_pipeline'] = module
-spec.loader.exec_module(module)
+import rag_pipeline as module
 
 class Vectors:
     def __init__(self):

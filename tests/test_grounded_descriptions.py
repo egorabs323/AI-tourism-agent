@@ -1,51 +1,151 @@
-"""Unit tests; run after dependencies of the main project have been installed."""
+"""Regression cases for object ownership; facts below are synthetic fixtures."""
+import json
 import unittest
-from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from rag_pipeline import Passage
-from structured_routes import Attraction, grounded_description, extract_route_candidates, answer_route
+from unittest.mock import patch
+
+from rag_pipeline import ArticleStore, Passage
+from structured_routes import object_facts, city_catalogue, answer_route, extract_route_candidates
+from route_enrichment import _batch_translate, _translation_valid, _source_summary
 
 
 class GroundedDescriptionsTests(unittest.TestCase):
-    def test_no_false_aerodromes(self):
-        a = Attraction('Parco degli Acquedotti', 1, 'Rome/South', 'https://example.com',
-                       'Parco degli Acquedotti Park contains preserved aqueducts in Rome.')
-        d = grounded_description(a)
-        self.assertIn('акведук', d)
-        self.assertNotIn('аэродром', d)
+    def test_caption_before_unrelated_listing_is_not_ownership(self):
+        text = ("Tower of London and Tower Bridge * £16.50 The great domed cathedral of "
+                "St Paul's, designed by Sir Christopher Wren, was built in the 17th century.")
+        self.assertEqual(object_facts(text, 'Tower Bridge'), [])
 
-    def test_no_unverified_details(self):
-        a = Attraction('Pantheon', 1, 'Rome', 'https://example.com', 'Pantheon can be found downtown.')
-        self.assertEqual(grounded_description(a), '')
+    def test_transport_and_nearby_hotel_are_not_descriptions(self):
+        text = ('* Near Green Park. One of the great hotels built in the 19th century. '
+                '* Tower Hill station is near Tower Bridge. Take the tube to the museum.')
+        self.assertEqual(object_facts(text, 'Green Park'), [])
+        self.assertEqual(object_facts(text, 'Tower Hill'), [])
 
-    def test_ignores_hallucinated_llm_description(self):
-        passages = [Passage('Colosseum is a landmark of ancient Rome. ' * 3,
-                            'Rome', 'https://example.com', 0.1, 'abc')]
-        response = {'attractions': [{'name': 'Colosseum', 'source': 1,
-                                     'description': 'В Колизее проходили футбольные матчи в 2025 году.'}]}
+    def test_record_primary_type_cannot_be_taken_from_neighbour(self):
+        text = ('* Tower Bridge. The iconic 19th century bridge located by the Tower of London. '
+                'It is decorated with high towers featuring a drawbridge. (Tube: Tower Hill)')
+        self.assertEqual(object_facts(text, 'Tower Hill'), [])
+        self.assertTrue(object_facts(text, 'Tower Bridge'))
+
+    def test_compound_sentence_stops_before_second_object(self):
+        text = ('Alpha Gallery houses a private art collection, Beta Museum houses '
+                'a collection of archaeological artefacts.')
+        facts = object_facts(text, 'Alpha Gallery')
+        self.assertTrue(facts)
+        self.assertNotIn('Beta', facts[0][1])
+
+    def test_photo_metadata_is_removed_before_subject_detection(self):
+        text = ('* Notre Dame de Paris 2013-07-24.jpg The early Gothic Cathédrale de '
+                "Notre Dame (Our Lady) has a 12th century design but wasn't completed until the 14th.")
+        facts = object_facts(text, 'Notre Dame')
+        self.assertTrue(facts)
+        self.assertNotIn('.jpg', facts[0][1])
+
+    def test_measurement_clause_and_complete_fact(self):
+        text = '50 m high and 45 m wide, the Alpha Arch is decorated with battle scenes and martial sculptures.'
+        facts = object_facts(text, 'Alpha Arch')
+        self.assertTrue(facts)
+        self.assertIn('decorated', facts[0][1])
+
+    def test_no_cross_bullet_extension(self):
+        text = ('* Alpha Palace is a baroque palace built in the 17th century. '
+                '* Beta Church contains a collection of ancient sculptures.')
+        facts = object_facts(text, 'Alpha Palace')
+        self.assertTrue(facts)
+        self.assertTrue(all('Beta' not in quote for _, quote in facts))
+
+    def test_district_article_is_not_stop(self):
+        p = Passage('North District is a district built in the 19th century. '
+                    'Alpha Palace is a baroque palace built in the 17th century.',
+                    'City/North District', 'https://en.wikivoyage.org/wiki/City/North_District', 0, '1')
+        self.assertNotIn('North District', [a.name for a in city_catalogue([p], 'City')])
+
+    def test_names_are_selected_from_records_without_llm(self):
+        p = Passage('Alpha Palace is a baroque palace built in the 17th century.',
+                    'City', 'https://en.wikivoyage.org/wiki/City', 0, '1')
+        with patch('structured_routes._ollama_json', side_effect=AssertionError('selection must be local')):
+            found, _ = extract_route_candidates([p], 'City', 2, None)
+        self.assertEqual([a.name for a in found], ['Alpha Palace'])
+
+    def test_empty_route_keeps_requested_days(self):
+        output = answer_route('Маршрут на два дня', [], 'City')
+        self.assertIn('День 1', output)
+        self.assertIn('День 2', output)
+        self.assertIn('недостаточно', output)
+
+    def test_translation_rejects_new_numbers_and_wrong_object_type(self):
+        quotes = {'Alpha Palace': 'Alpha Palace was built in 1700.',
+                  'Beta Church': 'Beta Church was built in 1800.'}
+        def generator(system, user, model, tokens):
+            return {'text': 'Это церковь, построенная в 1900 году.'}
+        with patch('route_enrichment._source_summary', return_value=''):
+            self.assertEqual(_batch_translate(quotes, generator=generator), {})
+        self.assertEqual(_translation_valid('Это парк, построенный в 1700 году.',
+                         'Alpha Palace was built in 1700.', 'Alpha Palace'), '')
+
+    def test_bc_cannot_turn_into_ad(self):
+        self.assertEqual(_translation_valid('Мост был построен около 180 г. н. э.',
+                         'The bridge was built around 180 BC.', 'Old Bridge'), '')
+
+    def test_isolated_translation_preserves_source_mapping(self):
+        quotes = {'Alpha Palace': 'Alpha Palace was built in 1700.',
+                  'Beta Church': 'Beta Church was built in 1800.'}
+        calls = []
+        def generator(system, user, model, tokens):
+            calls.append(json.loads(user))
+            return {'text': 'Дворец был построен в 1700 году.' if json.loads(user)['object'] == 'Alpha Palace'
+                    else 'Церковь была построена в 1800 году.'}
+        with patch('route_enrichment._source_summary', return_value=''):
+            self.assertEqual(len(_batch_translate(quotes, generator=generator)), 2)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([c['object'] for c in calls], list(quotes))
+
+    def test_source_facts_work_without_translation_or_city_rules(self):
+        text = 'The Star Observatory when completed measured 24 m high, 60 m in length, and 30 m in width.'
+        result = _source_summary('Star Observatory', text)
+        self.assertIn('высота — 24 м', result)
+        self.assertIn('длина — 60 м', result)
+        self.assertEqual(_source_summary('Unknown Tower', 'Unknown Tower can be found downtown.'), '')
+
+    def test_generic_district_and_transport_headings_not_selected(self):
+        passages = [Passage('* Tube. At the western end of the Piazza Completed in 1633 to a design by Someone. '
+                            '* St Pancras is a largely residential area with 19th-century houses and gardens. '
+                            '* Alpha Palace is a baroque palace built in the 17th century.',
+                            'City', 'https://en.wikivoyage.org/wiki/City', 0, '1')]
+        names = [a.name for a in city_catalogue(passages, 'City')]
+        self.assertNotIn('Tube', names)
+        self.assertNotIn('St Pancras', names)
+
+    def test_person_biography_not_selected_as_building(self):
+        passage = Passage('Saint Victor is said to have founded the church with Saint George.',
+                          'City', 'https://en.wikivoyage.org/wiki/City', 0, '1')
+        self.assertEqual(city_catalogue([passage], 'City'), [])
+
+    def test_fact_relations_do_not_change_opening_or_art_into_construction(self):
+        text = _source_summary('Test Museum', 'Test Museum was founded in 1700.')
+        self.assertIn('основано', text)
+        self.assertNotIn('построено', text)
+        self.assertEqual(_source_summary('Test Gallery', 'A collection of Renaissance paintings.'), '')
+
+    def test_material_and_designer_are_not_specific_to_a_city(self):
+        text = _source_summary('White Monument', 'White Monument is a marble monument designed by Ada Stone.')
+        self.assertIn('мрамор', text)
+        self.assertIn('Ada Stone', text)
+
+
+class ArticleStoreTests(unittest.TestCase):
+    def test_city_scope_byte_offsets_and_invalidation(self):
         with TemporaryDirectory() as folder:
-            with patch('structured_routes._ollama_json', return_value=response), \
-                 patch('structured_routes.ollama_configuration', return_value=('http://localhost:11434', 'qwen3:1.7b')):
-                attractions, descriptions = extract_route_candidates(passages, 'Rome', 1, None,
-                                                                       cache_dir=Path(folder))
-        self.assertEqual([a.name for a in attractions], ['Colosseum'])
-        self.assertNotIn('футболь', descriptions['colosseum'])
-
-    def test_sources_and_names_from_source_only(self):
-        passages = [Passage('Pantheon is an ancient Roman temple.', 'Rome',
-                            'https://example.org/rome', .1, 'id')]
-        response = {'attractions': [{'name': 'Pantheon', 'source': 1, 'description': 'Летающий дворец'},
-                                    {'name': 'Fake Vatican Castle', 'source': 1}]}
-        with patch('structured_routes.extract_route_candidates', return_value=(
-                [Attraction('Pantheon', 1, 'Rome', 'https://example.org/rome',
-                            'Pantheon is an ancient Roman temple.')],
-                {'pantheon': 'Историческое сооружение Рима.'})):
-            output = answer_route('маршрут на два дня', passages, 'Rome')
-        self.assertIn('Pantheon', output)
-        self.assertNotIn('Fake Vatican Castle', output)
-        self.assertIn('https://example.org/rome', output)
-
-
-if __name__ == '__main__':
-    unittest.main()
+            path, cache = Path(folder) / 'articles.jsonl', Path(folder) / 'offsets.sqlite3'
+            rows = [dict(article_id=str(i), title=title, url='https://en.wikivoyage.org/wiki/' + title,
+                         text='Данные ' + title)
+                    for i, title in enumerate(['City', 'City/North', 'Cityscape', 'Other'])]
+            path.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows), encoding='utf-8')
+            store = ArticleStore(path, cache)
+            self.assertEqual([p.title for p in store.city('City')], ['City', 'City/North'])
+            with patch.object(store, '_connect', side_effect=AssertionError('cache must be used')):
+                self.assertEqual(len(store.city('City')), 2)
+            rows[0]['text'] = 'Updated article text with more content'
+            path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+            self.assertEqual(store.city('City')[0].text, rows[0]['text'])

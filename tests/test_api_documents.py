@@ -1,26 +1,10 @@
 """Проверка HTTP API без реальных моделей и ChromaDB."""
-import collections
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-
-if 'rag_pipeline' not in sys.modules:
-    rag = types.ModuleType('rag_pipeline')
-    rag.Passage = collections.namedtuple('Passage', 'text title url distance chunk_id')
-    rag.RagAssistant = type('RagAssistant', (), {})
-    rag.answer_with_llm = lambda *args, **kwargs: 'Ответ'
-    rag.detect_destination = lambda *args, **kwargs: None
-    sys.modules['rag_pipeline'] = rag
-if 'structured_routes' not in sys.modules:
-    routes = types.ModuleType('structured_routes')
-    routes.answer_route = lambda *args, **kwargs: 'Маршрут'
-    routes.is_route_question = lambda question: False
-    sys.modules['structured_routes'] = routes
 
 import web_app
 
@@ -37,6 +21,9 @@ class ApiDocuments(unittest.TestCase):
                  patch.object(web_app, 'index_document', return_value=1), \
                  patch.object(web_app, 'remove_document') as remove:
                 api = TestClient(web_app.app)
+                self.addCleanup(api.close)
+                self.assertEqual(api.post('/api/auth/register', json={
+                    'username': 'documents', 'password': 'document-test-password'}).status_code, 201)
                 cid = api.post('/api/conversations', json={}).json()['id']
                 text = ('Маршрут Лазурная тропа завершается в Саду маяков. ' * 3).encode()
                 response = api.post('/api/conversations/{}/documents'.format(cid),

@@ -17,8 +17,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from auth_local import COOKIE, SESSION_DAYS, init_auth, create_user, login_user, create_session, read_session, revoke_session, check_origin
 
-from rag_pipeline import RagAssistant, answer_with_llm, detect_destination
-from structured_routes import answer_route, augment_route_passages
+from rag_pipeline import RagAssistant, detect_destination
+from structured_routes import answer_route
 from route_enrichment import enrich_route_answer
 from qa_answers import answer_factual
 from context_query import contextual_search_query
@@ -78,7 +78,8 @@ def get_assistant():
     if _assistant is None:
         with _init_lock:
             if _assistant is None:
-                # Загрузка SentenceTransformers/ChromaDB лишь при первом запросе.
+                # Коллекция открывается при первом запросе; E5 загружается
+                # отдельно только при поиске векторов или работе с документами.
                 _assistant = RagAssistant(db=DATA / "chroma", articles=DATA / "processed" / "articles.jsonl")
     return _assistant
 
@@ -302,18 +303,18 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
             # Вопрос о загруженном документе: НЕ смешиваем с общими статьями Wikivoyage.
             passages = own_passages
             identified = selected
+        elif mode == 'route':
+            from rag_pipeline import resolve_title
+            identified = resolve_title(selected, assistant.titles) if selected else None
+            if selected and not identified:
+                raise ValueError('Не найден город в локальной базе: ' + selected)
+            passages = list(assistant.articles.city(identified)) if identified else []
         else:
             search_question = contextual_search_query(question, history, destination=selected)
             search_question = retrieval_query(search_question, mode)
-            # Для маршрута расширяем кандидатов; справка и рекомендации работают как раньше.
-            route_top_k = max(top_k, 12) if mode == "route" else top_k
-            passages, identified = assistant.retrieve(search_question, destination=selected, top_k=route_top_k)
+            passages, identified = assistant.retrieve(search_question, destination=selected, top_k=top_k)
         if mode == "route" and not own_passages:
-            # Ищем кандидатов в городских статьях, не только в первых top-k.
-            # Кандидаты подтверждаются локальной ChromaDB, без внешних API.
-            passages, prominence = augment_route_passages(
-                passages, identified or selected or "", assistant.collection, assistant.titles)
-            answer = answer_route(question, passages, identified, prominence=prominence)
+            answer = answer_route(question, passages, identified)
             answer, passages = enrich_route_answer(answer, passages, assistant, identified)
         else:
             answer = answer_factual(question, passages, history, mode=mode)

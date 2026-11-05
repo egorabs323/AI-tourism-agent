@@ -12,6 +12,7 @@ from pathlib import Path
 
 from rag_pipeline import RagAssistant, answer_with_llm
 from structured_routes import answer_route, is_route_question
+from route_enrichment import enrich_route_answer
 
 
 def append_log(path: Path, record: dict):
@@ -52,10 +53,14 @@ def main():
                 passages, detected = [], None
             else:
                 # Следующий вопрос с новым явно названным городом переключает направление.
-                from rag_pipeline import detect_destination
+                from rag_pipeline import detect_destination, resolve_title
                 explicit = detect_destination(question, assistant.titles)
                 requested = explicit or args.destination or previous_destination
-                passages, detected = assistant.retrieve(question, destination=requested, top_k=args.top_k)
+                if is_route_question(question) and not args.no_llm:
+                    detected = resolve_title(requested, assistant.titles) if requested else None
+                    passages = list(assistant.articles.city(detected)) if detected else []
+                else:
+                    passages, detected = assistant.retrieve(question, destination=requested, top_k=args.top_k)
                 previous_destination = detected
             if args.no_llm:
                 answer = "\n".join(
@@ -63,6 +68,7 @@ def main():
                     for i, p in enumerate(passages, 1)) or "Подходящие чанки не найдены"
             elif not args.without_rag and is_route_question(question):
                 answer = answer_route(question, passages, detected, args.model)
+                answer, passages = enrich_route_answer(answer, passages, assistant, detected, args.model)
             else:
                 answer = answer_with_llm(question, passages, history, args.model, args.without_rag)
             print("\nАссистент:\n" + answer)

@@ -40,12 +40,14 @@ function renderRoute(parsed) {
     const intro = document.createElement('p');intro.className='route-intro';intro.textContent=parsed.preface;container.append(intro);
   }
   for (const day of parsed.days) {
-    if (!day.stops.length) continue;
     const section=document.createElement('section');section.className='day-card';
     const heading=document.createElement('div');heading.className='day-heading';
     const title=document.createElement('h3');title.textContent=`День ${day.number}${day.title ? ' · ' + day.title : ''}`;
     const count=document.createElement('span');count.className='stop-count';count.textContent=`${day.stops.length} ${day.stops.length === 1 ? 'остановка' : day.stops.length < 5 ? 'остановки' : 'остановок'}`;
     heading.append(title,count);section.append(heading);
+    if (day.message) {
+      const message=document.createElement('p');message.className='stop-missing';message.textContent=day.message;section.append(message);
+    }
     const list=document.createElement('ol');list.className='stops';
     for (const stop of day.stops) {
       const item=document.createElement('li');item.className='stop';

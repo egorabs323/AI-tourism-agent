@@ -3,12 +3,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from prepare_dataset import normalize_text, split_into_chunks, prepare
+from prepare_dataset import normalize_text, preserve_layout, split_into_chunks, prepare
 
 
 class TestPreparation(unittest.TestCase):
     def test_normalization(self):
         self.assertEqual(normalize_text("  A\n  B\t C&nbsp;"), "A B C")
+
+    def test_article_layout_is_preserved_separately(self):
+        self.assertEqual(preserve_layout('See\n\n* Alpha\n  Details\n* Beta'),
+                         'See\n\n* Alpha\nDetails\n* Beta')
 
     def test_chunking_preserves_every_word(self):
         tokens = [f"word{i}" for i in range(24)]

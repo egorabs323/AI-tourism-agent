@@ -30,7 +30,7 @@
     for (const line of clean) {
       const header = line.match(/^#{0,3}\s*День\s+(\d+)(?:\s*[:—-]\s*(.*))?\s*$/i);
       if (header) {
-        day = { number: Number(header[1]), title: header[2] || '', stops: [] };
+        day = { number: Number(header[1]), title: header[2] || '', stops: [], message: '' };
         days.push(day);
         continue;
       }
@@ -45,9 +45,13 @@
           continue;
         }
       }
+      if (day && /^Подтверждённых объектов для этого дня недостаточно\.$/.test(line)) {
+        day.message = line;
+        continue;
+      }
       if (line) (day ? other : preface).push(line);
     }
-    const isRoute = days.length > 0 && days.some(d => d.stops.length > 0) && other.length === 0;
+    const isRoute = days.length > 0 && days.every(d => d.stops.length > 0 || d.message) && other.length === 0;
     return { kind: isRoute ? 'route' : 'text', days, note,
       text: clean.join('\n').trim(), preface: preface.join(' ') };
   }
