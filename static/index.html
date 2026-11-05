@@ -5,7 +5,7 @@
 <section id="auth-screen" class="auth-screen" hidden>
   <form id="auth-form" class="auth-card">
     <h1>✦ Travel RAG</h1>
-    <p>Локальный туристический ассистент. Войди или создай аккаунт.</p>
+    <p>Войди или создай аккаунт.</p>
     <div class="auth-switch"><button type="button" id="mode-login" class="selected">Вход</button><button type="button" id="mode-register">Регистрация</button></div>
     <label for="auth-username">Логин</label>
     <input id="auth-username" autocomplete="username" maxlength="32" required placeholder="3–32 символа, латиница"/>
@@ -13,41 +13,46 @@
     <input id="auth-password" type="password" autocomplete="current-password" maxlength="128" required placeholder="Не менее 10 символов"/>
     <p id="auth-error" class="auth-error" role="alert" hidden></p>
     <button type="submit" id="auth-submit">Войти</button>
-    <small>Данные пользователей и документы сохраняются локально.</small>
+    
   </form>
 </section>
 <div class="layout" id="main-layout" hidden>
  <aside class="sidebar">
-  <div class="brand">✦ Travel RAG <span>Локальный ассистент</span></div>
+  <div class="brand">✦ Travel RAG</div>
   <button id="new-chat" class="new-chat">＋ Новый диалог</button>
   <div class="nav-label">История диалогов</div>
   <div id="conversations" class="conversations"></div>
   <div class="account-bar"><span id="account-name"></span><button type="button" id="logout-btn">Выйти</button></div>
-  <div class="side-footer">Wikivoyage · ChromaDB · Qwen3 1.7B<br/>Данные сохраняются на этом ПК</div>
+  
  </aside>
  <main class="main">
-  <header class="header"><div><strong>Туристический гид</strong><small>Поиск в Wikivoyage и рекомендации на основе источников</small></div><div class="status"><span class="dot"></span> Локально</div></header>
-  <div class="chat-scroll" id="chat-scroll"><div id="messages" class="messages"><section class="empty"><div class="empty-icon">⌁</div><h1>Куда отправимся?</h1><p>Выбери город и спроси о достопримечательностях или маршруте.</p><div class="suggestions"><button data-prompt="Составь маршрут по Риму на два дня">Маршрут по Риму</button><button data-prompt="Что посмотреть в Париже за один день?">Париж за день</button><button data-prompt="Какие известные музеи есть в Риме?">Музеи Рима</button></div></section></div></div>
+  <header class="header"><div><strong>Туристический гид</strong><small>Поиск в Wikivoyage и рекомендации на основе источников</small></div></header>
+  <div class="chat-scroll" id="chat-scroll"><div id="messages" class="messages"><section class="empty"><div class="empty-icon">⌁</div><h1>Куда отправимся?</h1><p>Выбери город и спроси о достопримечательностях или маршруте.</p></section></div></div>
   <div class="composer-wrap">
+   <details class="document-disclosure"><summary>Документы диалога <span>PDF, DOCX, TXT</span></summary>
    <section class="document-panel" aria-label="Документы диалога">
     <div class="document-head"><strong>Документы этого диалога</strong><span>PDF · DOCX · TXT · до 5 МБ</span></div>
     <div class="document-controls"><input id="file-input" type="file" accept=".pdf,.docx,.txt" aria-label="Выбрать документ"/><button id="upload-btn" type="button">Загрузить</button></div>
     <div id="upload-status" class="upload-status" role="status"></div>
     <div id="documents" class="document-list"></div>
    </section>
+   </details>
    <form id="chat-form" class="composer">
-   <label for="destination">Город / название статьи на английском</label>
-   <input id="destination" maxlength="100" placeholder="Например: Rome, Paris, London" autocomplete="off"/>
+   <div class="composer-fields"><div class="field">
+   <label for="destination">Город / статья</label>
+   <input id="destination" maxlength="100" placeholder="Rome, Paris, London" autocomplete="off"/>
+   </div><div class="field">
    <label for="request-mode">Тип запроса</label>
    <select id="request-mode" name="request-mode" aria-describedby="mode-hint">
      <option value="route">Планирование маршрутов</option>
      <option value="recommendations">Рекомендации</option>
      <option value="reference">Справочная информация</option>
    </select>
+   </div></div>
    <p id="mode-hint" class="mode-hint">Вопросы о городе, месте или объекте по статьям Wikivoyage.</p>
    <label for="question">Твой вопрос</label>
    <textarea id="question" rows="2" maxlength="1500" placeholder="Например: составь маршрут на два дня по центру Рима"></textarea>
-   <div class="composer-bottom"><span id="hint">Enter — отправить, Shift+Enter — новая строка</span><button id="send" type="submit">Отправить ↗</button></div>
+   <div class="composer-bottom"><button id="send" type="submit">Отправить ↗</button></div>
   </form><div id="error" class="error" role="alert" hidden></div><div class="notice">Ответы основаны на туристических статьях. Расстояния и точная навигация не рассчитываются; проверяй актуальные условия посещения.</div></div>
  </main>
 </div>
