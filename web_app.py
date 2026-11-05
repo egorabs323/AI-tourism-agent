@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from auth_local import COOKIE, SESSION_DAYS, init_auth, create_user, login_user, create_session, read_session, revoke_session, check_origin
 
 from rag_pipeline import RagAssistant, answer_with_llm, detect_destination
-from structured_routes import answer_route
+from structured_routes import answer_route, augment_route_passages
 from route_enrichment import enrich_route_answer
 from qa_answers import answer_factual
 from context_query import contextual_search_query
@@ -309,7 +309,11 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
             route_top_k = max(top_k, 12) if mode == "route" else top_k
             passages, identified = assistant.retrieve(search_question, destination=selected, top_k=route_top_k)
         if mode == "route" and not own_passages:
-            answer = answer_route(question, passages, identified)
+            # Ищем кандидатов в городских статьях, не только в первых top-k.
+            # Кандидаты подтверждаются локальной ChromaDB, без внешних API.
+            passages, prominence = augment_route_passages(
+                passages, identified or selected or "", assistant.collection, assistant.titles)
+            answer = answer_route(question, passages, identified, prominence=prominence)
             answer, passages = enrich_route_answer(answer, passages, assistant, identified)
         else:
             answer = answer_factual(question, passages, history, mode=mode)
