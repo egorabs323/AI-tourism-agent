@@ -126,7 +126,7 @@ def validate_attractions(raw: list, passages: list[Passage], max_items: int = 18
         if not evidence or name.casefold() in seen:
             continue
         # Заголовки/фразы, не являющиеся конкретными объектами, отклоняем.
-        if name.casefold() in {'rome', 'italy', 'historic centre', 'city center', 'city centre',
+        if name.casefold() in {'grand', 'rome', 'italy', 'historic centre', 'city center', 'city centre',
                                'see', 'do', 'museum', 'church', 'palace', 'fountain', 'travel'}:
             continue
         # Эвристика: явные дальние поездки и города в секциях Get out исключаются на этапе поиска.
@@ -274,121 +274,134 @@ def _route_focused_excerpt(text, limit=1050):
     window = text[max(0, match.start() - 85):match.start() + (limit - len(head) - 50)]
     return (head + ' ... ' + window).strip()[:limit]
 
-# ROUTE_CITY_CATALOG_V3: названия и значимость по городским статьям Wikivoyage.
-# Загружаются только чанки выбранного города, без повторной индексации и сети.
-_CITY_NAMED_SIGHT = re.compile(
+# ROUTE_CITY_CATALOG_V4. General-purpose POI detection from local city articles.
+# No city-specific landmark list and no external requests.
+_CITY_SIGHT_RE = re.compile(
     r"(?<![\w])((?:(?:[A-ZÀ-ÖØ-Þ][\wÀ-ÿ’'-]+)\s+){1,4}"
     r"(?:Tower|Museum|Cathedral|Basilica|Chapel|Palace|Bridge|Gardens?|"
-    r"Square|Church|Monument|Memorial|Gallery|Opera|Fortress))\b"
+    r"Square|Church|Monument|Memorial|Gallery|Opera|Fortress|Forum|Arc))\b"
 )
-_CITY_SPECIAL_SIGHT = re.compile(
-    r"\b(Arc de Triomphe(?: de l[’']Étoile)?|Notre[- ]Dame(?: de Paris)?)\b",
-    flags=re.I,
+_CITY_LOWER_RE = re.compile(
+    r"(?<!\w)\b([A-ZÀ-ÖØ-Þ][\wÀ-ÿ’'-]{3,})\s+"
+    r"(?:museum|palace|cathedral|tower|gallery)\b"
 )
-_CITY_LOWER_TYPE = re.compile(
-    r"\b([A-ZÀ-ÖØ-Þ][\wÀ-ÿ’'-]{3,})\s+(?:museum|palace|cathedral)\b"
+_CITY_SPECIAL_RE = re.compile(
+    r"\b(Arc de Triomphe(?: de l[’']Étoile)?|Notre[- ]Dame(?: de Paris)?)\b", re.I
 )
 _CITY_BAD_NAMES = frozenset({
-    'new bridge', 'old bridge', 'the bridge', 'the tower', 'the museum',
-    'national museum', 'city museum', 'the church', 'the cathedral',
-    'the palace', 'the square', 'the garden', 'the gallery',
+    'new bridge', 'old bridge', 'grand', 'the grand', 'the bridge',
+    'the tower', 'the museum', 'national museum', 'city museum',
+    'the church', 'the cathedral', 'the palace', 'the square',
+    'the garden', 'the gallery', 'pont des arts bridge',
 })
+_CITY_BAD_FIRST = {'destination', 'source', 'this', 'these', 'those', 'the',
+                   'another', 'also', 'near', 'nearby', 'famous', 'historic',
+                   'beautiful', 'old', 'new', 'grand', 'national', 'local'}
+_CITY_CONTEXT_BAD = re.compile(r'\b(?:hotel|hostel|pub crawl|restaurant|bar|rentals|'
+                               r'booking|souvenir|airport|accommodation)\b', re.I)
 
 
 def _city_names(text: str, city: str = '') -> list[str]:
-    """Названия из текста, без названий, придуманных LLM."""
     result = []
-    matches = ([(m, False) for m in _CITY_NAMED_SIGHT.finditer(text)]
-               + [(m, False) for m in _CITY_SPECIAL_SIGHT.finditer(text)]
-               + [(m, True) for m in _CITY_LOWER_TYPE.finditer(text)])
-    for m, lower_category in matches:
-        name = re.sub(r'^(?:the|a|an)\s+', '', ' '.join(m.group(1).split()), flags=re.I)
-        if lower_category:
-            # `Louvre museum` -> Louvre; `British Museum` оставляем целиком.
-            name = name.strip()
-        if (4 <= len(name) <= 70 and name.casefold() not in _CITY_BAD_NAMES
-                and name.casefold() != city.casefold()
-                and name.split()[0].casefold() not in {'destination', 'source'}):
+    for regex in (_CITY_SIGHT_RE, _CITY_LOWER_RE, _CITY_SPECIAL_RE):
+        for match in regex.finditer(text):
+            name = ' '.join(match.group(1).strip().split())
+            name = re.sub(r'^(?:the|a|an)\s+', '', name, flags=re.I)
+            if not 5 <= len(name) <= 75 or name.casefold() == city.casefold():
+                continue
+            if name.casefold() in _CITY_BAD_NAMES:
+                continue
+            if name.split()[0].casefold() in _CITY_BAD_FIRST:
+                continue
             result.append(name)
     return list(dict.fromkeys(result))
 
 
-def augment_route_passages(passages: list[Passage], destination: str,
-                           collection, city_titles, max_extra: int = 7):
-    """Расширяет маршрут подтверждёнными кандидатами из городских статей.
-
-    Возвращает (passages, prominence). Если Chroma не поддерживает нужный
-    метафильтр, сохраняет исходную выдачу. Данные в Chroma не изменяются.
-    """
+def _city_catalogue(passages, destination, collection, city_titles, limit=18):
+    """Select source-backed candidates across the city's locally indexed chunks."""
+    from collections import Counter
     titles = [t for t in city_titles if isinstance(t, str)
               and (t.casefold() == destination.casefold()
                    or t.casefold().startswith(destination.casefold() + '/'))]
     if not titles or collection is None:
-        return passages, {}
+        return [], {}
     try:
         records = collection.get(where={'title': {'$in': titles[:120]}},
                                  include=['documents', 'metadatas'])
     except Exception:
-        return passages, {}
+        return [], {}
     docs = records.get('documents') or []
     metas = records.get('metadatas') or []
     ids = records.get('ids') or []
     if not docs:
-        return passages, {}
-    from collections import Counter
-    counts = Counter()
-    candidates = {}
+        return [], {}
+    entries = {}
+    mentions = Counter()
     for i, doc in enumerate(docs):
         if not isinstance(doc, str):
             continue
-        meta = metas[i] or {} if i < len(metas) else {}
+        meta = metas[i] if i < len(metas) and isinstance(metas[i], dict) else {}
         title = str(meta.get('title') or '')
         if title.casefold() != destination.casefold() and not title.casefold().startswith(destination.casefold() + '/'):
             continue
-        names = _city_names(doc, destination)
-        # Повторения внутри одного чанка не раздувают значимость.
-        for name in names:
+        for name in _city_names(doc, destination):
             key = name.casefold()
-            counts[key] += 1
-            pos = doc.casefold().find(key)
-            window = doc[max(0, pos - 40):pos + len(name) + 280].casefold()
-            # Выбираем чанки с описаниями, а не упоминаниями в адресах отелей.
-            informative = len(window) > 100 and bool(re.search(
-                r'\b(?:built|famous|known|constructed|contains|houses|is|was|iconic|museum|historic|century|architecture)\b', window))
-            quality = (2 if title != destination else 0) + (3 if informative else 0)
-            if any(x in window for x in ('hotel', 'pub crawl', 'restaurant', 'hostel')):
-                quality -= 3
-            old = candidates.get(key)
+            mentions[key] += 1
+            at = doc.casefold().find(key)
+            left = doc[max(0, at - 65):at]
+            right = doc[at + len(name):at + len(name) + 420]
+            around = (left + name + right)
+            description_words = bool(re.search(r'\b(?:is|was|built|constructed|famous|'
+                r'known|historic|century|houses|contains|opened|dates|designed|iconic|'
+                r'architecture|monument|museum|gallery|exhibits)\b', right, re.I))
+            main_page = title.casefold() == destination.casefold()
+            penalty = 8 if _CITY_CONTEXT_BAD.search(around[:210]) else 0
+            # Prefer district sight entries with descriptive text, not incidental mentions.
+            quality = (5 if description_words else 0) + (3 if not main_page else 0) - penalty
+            quality += (2 if re.match(r'\s*(?:[—–*:])', right) else 0)
+            old = entries.get(key)
             if old is None or quality > old[0]:
-                candidates[key] = (quality, name, doc, meta, ids[i] if i < len(ids) else '')
-    if not counts:
-        return passages, {}
-    # Корректируем частоту по всем городским чанкам (включая упоминания без
-    # шаблона имени, но без отдельного загрузочного цикла по каждому объекту).
-    city_docs = [str(d).casefold() for d in docs if isinstance(d, str)]
-    existing = {p.chunk_id for p in passages}
-    prominence = {}
+                entries[key] = (quality, name, doc, meta, ids[i] if i < len(ids) else '')
     ranked = []
-    for key, (quality, name, doc, meta, chunk_id) in candidates.items():
-        mentions = sum(key in text for text in city_docs)
-        prominence[key] = mentions
-        rank = mentions + min(counts[key], 6) + max(0, quality)
-        if len(name.split()) < 2 and mentions < 3:
+    for key, (quality, name, doc, meta, chunk_id) in entries.items():
+        # Incidental single-word matches should never become route stops.
+        if len(name.split()) == 1 and mentions[key] < 4:
             continue
-        ranked.append((rank, name, doc, meta, chunk_id))
-    ranked.sort(key=lambda row: (-row[0], row[1].casefold()))
-    extra = []
+        if quality < 0:
+            continue
+        score = min(mentions[key], 35) * 1.0 + quality * 2.2
+        # The main city page provides a weak, not definitive, notability signal.
+        if any(name.casefold() in str(d).casefold() for d, m in zip(docs, metas)
+               if isinstance(m, dict) and str(m.get('title', '')).casefold() == destination.casefold()
+               and isinstance(d, str)):
+            score += 5
+        ranked.append((score, name, doc, meta, chunk_id))
+    ranked.sort(key=lambda x: (-x[0], x[1].casefold()))
+    selected = ranked[:limit]
+    return selected, {name.casefold(): mentions[name.casefold()] for _, name, _, _, _ in selected}
+
+
+def augment_route_passages(passages: list[Passage], destination: str,
+                           collection, city_titles, max_extra: int = 18):
+    """Add best city passages before generic semantic results and pass prominence."""
+    ranked, counts = _city_catalogue(passages, destination, collection, city_titles, max_extra)
+    if not ranked:
+        return passages, {}
+    ordered = []
+    used = set()
     for _, name, doc, meta, chunk_id in ranked:
-        if len(extra) >= max_extra:
-            break
-        if chunk_id in existing:
+        if str(chunk_id) in used:
             continue
         title = str(meta.get('title') or destination)
         url = str(meta.get('url') or 'https://en.wikivoyage.org/wiki/' + title.replace(' ', '_'))
-        extra.append(Passage(text=doc, title=title, url=url,
-                             distance=0.0, chunk_id=str(chunk_id)))
-        existing.add(chunk_id)
-    return list(passages) + extra, prominence
+        ordered.append(Passage(text=doc, title=title, url=url,
+                               distance=0.0, chunk_id=str(chunk_id)))
+        used.add(str(chunk_id))
+    for passage in passages:
+        if passage.chunk_id not in used:
+            ordered.append(passage)
+            used.add(passage.chunk_id)
+    return ordered, counts
 
 
 def extract_route_candidates(passages: list[Passage], destination: str,
@@ -400,61 +413,57 @@ def extract_route_candidates(passages: list[Passage], destination: str,
     Invariant: user-visible stop names must exactly occur in the cited passage.
     Descriptions are conservative Python templates, not claims generated by LLM.
     """
-    # ROUTE_SELECTION_V2: не ограничиваем выбор случайным началом чанка.
-    excerpts = []
-    # Ограничение контекста Ollama: новые источники доступны Python-отбору,
-    # но в промпт идут только первые восемь и последние четыре.
-    shown = list(range(min(8, len(passages))))
-    shown += list(range(max(8, len(passages) - 4), len(passages)))
-    for i in dict.fromkeys(shown):
-        passage = passages[i]
-        excerpt = _route_focused_excerpt(passage.text, 850)
-        excerpts.append(f"[Источник {i + 1}, {passage.title}]\n{excerpt}")
-    source_data = "\n\n".join(excerpts)
-    selected_model = ollama_configuration(model)[1]
-    signature = hashlib.sha256(
-        json.dumps(["route_selection_v2", destination, days, selected_model, source_data],
-                   ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
-    cache_file = cache_dir / (signature + ".json")
-    result = None
-    if cache_file.is_file():
-        try:
-            cached = json.loads(cache_file.read_text(encoding="utf-8"))
-            if isinstance(cached, dict) and isinstance(cached.get("attractions"), list):
-                result = cached
-        except (OSError, ValueError):
-            pass
-    if result is None:
-        system = (
-            'Extract specific sightseeing attractions IN the requested city. '
-            'Return ONLY compact JSON: '
-            '{"attractions":[{"name":"EXACT English substring","source":1}]}. '
-            'Prefer important landmarks, monuments, museums, squares, historic buildings. '
-            'Avoid remote day trips, suburbs and incidental minor mentions. '
-            'Every name MUST be copied exactly from its source text. '
-            'Do not translate names, invent places, or write descriptions. '
-            'At most 9 attractions.'
-        )
-        result = _ollama_json(system, f"CITY: {destination}\nDAYS: {days}\n\n{source_data}",
-                              model, tokens=650)
-        if isinstance(result.get("attractions"), list):
+    # A city-catalogue exists: use deterministic, source-grounded names first.
+    # Qwen may produce malformed names (e.g. "Grand"), so it cannot pick stops
+    # when the city catalogue supplies candidates.
+    raw = []
+    catalogue_present = bool(prominence)
+    if catalogue_present:
+        for i, passage in enumerate(passages, 1):
+            for name in _city_names(passage.text, destination):
+                if name.casefold() in prominence:
+                    raw.append({'name': name, 'source': i})
+    else:
+        # Fallback for databases where the city-title metadata filter is absent.
+        excerpts = []
+        for i, passage in enumerate(passages[:9], 1):
+            excerpts.append(f'[Источник {i}, {passage.title}]\n'
+                            + _route_focused_excerpt(passage.text, 750))
+        source_data = '\n\n'.join(excerpts)
+        selected_model = ollama_configuration(model)[1]
+        signature = hashlib.sha256(json.dumps(
+            ['route_selection_v4', destination, days, selected_model, source_data],
+            ensure_ascii=False).encode('utf-8')).hexdigest()
+        cache_file = cache_dir / (signature + '.json')
+        result = None
+        if cache_file.is_file():
+            try:
+                result = json.loads(cache_file.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                pass
+        if result is None:
+            system = ('Extract tourist landmark names only. Return compact JSON '
+                      '{"attractions":[{"name":"exact English substring","source":1}]}. '
+                      'Only named monuments, museums, churches or sights; never '
+                      'generic words, adjectives or districts. Up to 9 names.')
+            result = _ollama_json(system, 'CITY: ' + destination + '\n' + source_data,
+                                  model, tokens=600)
             try:
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+                cache_file.write_text(json.dumps(result, ensure_ascii=False), encoding='utf-8')
             except OSError:
-                pass  # Caching is optional; generation must still work.
-    raw = result.get("attractions", [])
-    if not isinstance(raw, list):
-        raw = []
-    # Добавляем кандидатов, которые явно фигурируют в самом тексте путеводителя.
-    # Они должны дословно присутствовать в источнике, список не привязан к городам.
-    raw.extend(_landmark_candidates(passages))
-    # Городской каталог извлекается из всех найденных статей, включая
-    # достопримечательности, которые Qwen 1.7B не перечислила.
-    for i, p in enumerate(passages, 1):
-        raw.extend({"name": name, "source": i} for name in _city_names(p.text, destination))
-    verified = validate_attractions(raw, passages, max_items=120)
+                pass
+        if isinstance(result, dict) and isinstance(result.get('attractions'), list):
+            for item in result['attractions']:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get('name')
+                if isinstance(name, str) and name in _city_names(name, destination):
+                    raw.append(item)
+        for i, passage in enumerate(passages, 1):
+            raw.extend({'name': n, 'source': i}
+                       for n in _city_names(passage.text, destination))
+    verified = validate_attractions(raw, passages, max_items=160)
     # Score by source relevance (rank), central-city sections, number of explicit mentions.
     # This is a heuristic, NOT a measured popularity or geographic distance.
     def score(a: Attraction) -> float:
@@ -477,7 +486,8 @@ def extract_route_candidates(passages: list[Passage], destination: str,
                 + (1.0 if notable else 0.0) - penalty)
     # Важность в полном наборе городских текстов важнее порядка Qwen.
     prominence = prominence or {}
-    verified.sort(key=lambda a: score(a) + 3.5 * min(prominence.get(a.name.casefold(), 0), 20),
+    verified.sort(key=lambda a: (2.6 * min(prominence.get(a.name.casefold(), 0), 35)
+                                 + score(a) + (5 if a.title.casefold() != destination.casefold() else 0)),
                   reverse=True)
     # Описания, придуманные LLM, принципиально НЕ показываем пользователю.
     # Для Qwen3 1.7B даже валидный JSON нередко содержит фактические ошибки.
