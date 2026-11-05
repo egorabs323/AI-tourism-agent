@@ -15,10 +15,11 @@ STOP = re.compile(r'^(\s*\d+[.)]\s+)(.+?)\s+\[Источник\s*(\d+)\](?:\s*[�
 SOURCE = re.compile(r'^Источники:\s*$')
 NOTE = re.compile(r'^(?:Группировка по координатам|Географическая группировка|Порядок остановок)')
 FALLBACK = 'В найденных фрагментах нет достаточно точного описания этого объекта.'
-CACHE_VERSION = 'grounded-v5'
+CACHE_VERSION = 'grounded-v6'
 _INVALID = re.compile(r'^(?:одно предложение|описание|пример|текст|нет данных|не указано|one sentence|description|short description)[.!\s]*$', re.I)
 _HOURS = re.compile(r'\b(?:open|opening|hours?|closed|daily|tickets?|admission|price|cost|€|\$|am|pm)\b|\b\d{1,2}:\d{2}\b', re.I)
 _SPATIAL = re.compile(r'^(?:near|nearby|opposite|next to|around|behind|beside)\b', re.I)
+_UNRELATED = re.compile(r'\b(?:pub\s+crawl|pub\s+tour|bar\s+crawl|walking\s+tour|tour\s+operator|hotel|hostel|restaurant|cafe|nightclub|souvenir\s+shop|ticket\s+office)\b', re.I)
 _SCRIPTS = re.compile(r'[\u3400-\u9fff\u3040-\u30ff]')
 
 
@@ -60,7 +61,7 @@ def _evidence_sentence(text, name):
         if before and not re.fullmatch(r'(?:The|Visit|See|Explore|Historic|Famous|A|An|In|At|This|The famous|The historic)\s*', before, re.I):
             continue
         after = clause[m.end():].strip(' *,:;()—–-')
-        if not after or _HOURS.search(clause) or len(after) < 18:
+        if not after or _HOURS.search(clause) or _UNRELATED.search(clause) or len(after) < 18:
             continue
         # A plain list entry may have an em dash or asterisks instead of 'is'.
         verb = re.search(r'\b(?:is|was|are|were|has|have|houses|contains|features|built|dates|stands|located|known|designed|constructed|includes|served|became|remains|offers|comprises|opened|famous)\b', after[:190], re.I)
@@ -105,7 +106,7 @@ def _quality_score(sentence, name):
     # These phrases usually discuss the city as a whole, not the named POI.
     generic = ('historic centre of the city', 'world heritage site',
                'tourist attractions in', 'many attractions', 'city is famous')
-    if any(x in low for x in generic):
+    if _UNRELATED.search(sentence) or any(x in low for x in generic):
         return -100
     # The passage must have meaningful facts beyond a title and category.
     score = 0
