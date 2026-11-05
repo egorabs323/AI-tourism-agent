@@ -1,10 +1,4 @@
-"""Локальный веб-интерфейс поверх существующего RAG (этап 4, часть 1).
-
-Запуск из корня проекта: python web_app.py
-Открыть: http://127.0.0.1:8000
-"""
 from __future__ import annotations
-
 import asyncio
 from contextlib import contextmanager
 import json
@@ -17,7 +11,6 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
-
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,7 +20,6 @@ from auth_local import COOKIE, SESSION_DAYS, init_auth, create_user, login_user,
 from rag_pipeline import RagAssistant, answer_with_llm, detect_destination
 from structured_routes import answer_route
 from route_enrichment import enrich_route_answer
-from request_router import classify_request
 from qa_answers import answer_factual
 from context_query import contextual_search_query
 from request_modes import validate_mode, retrieval_query

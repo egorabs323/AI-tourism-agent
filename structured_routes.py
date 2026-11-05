@@ -1,11 +1,4 @@
-"""Структурированный маршрут: только подтверждённые названия объектов.
-
-Четыре стадии: retrieve (в chat_rag.py), extract (Ollama + проверка по
-оригинальным чанкам), group (детерминированно по статьям Wikivoyage),
-render (Ollama переводит описания, но не выбирает остановки).
-"""
 from __future__ import annotations
-
 import json
 import hashlib
 from pathlib import Path
