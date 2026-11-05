@@ -305,7 +305,9 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
         else:
             search_question = contextual_search_query(question, history, destination=selected)
             search_question = retrieval_query(search_question, mode)
-            passages, identified = assistant.retrieve(search_question, destination=selected, top_k=top_k)
+            # Для маршрута расширяем кандидатов; справка и рекомендации работают как раньше.
+            route_top_k = max(top_k, 12) if mode == "route" else top_k
+            passages, identified = assistant.retrieve(search_question, destination=selected, top_k=route_top_k)
         if mode == "route" and not own_passages:
             answer = answer_route(question, passages, identified)
             answer, passages = enrich_route_answer(answer, passages, assistant, identified)

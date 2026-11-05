@@ -1,0 +1,108 @@
+ДИАГНОСТИКА ПАРИЖА (только чтение)
+Город: Paris
+Статей по городу: 22
+Задача: выяснить, содержатся ли названия объектов в городской части ChromaDB.
+
+Всего чанков городских статей: 381
+Статей с наибольшим числом чанков: [('Paris', 129), ('Paris/1st arrondissement', 26), ('Paris/4th arrondissement', 21), ('Paris/8th arrondissement', 21), ('Paris/5th arrondissement', 18), ('Paris/15th arrondissement', 15), ('Paris/18th arrondissement', 15), ('Paris/11th arrondissement', 14), ('Paris/6th arrondissement', 13), ('Paris/16th arrondissement', 12), ('Paris/La Défense', 12), ('Paris/12th arrondissement', 11)]
+
+========================================================================
+Эйфелева башня: чанков с названием — 52
+  Paris/15th arrondissement | wv_26817_0003
+  €11.50, with discounts, children under 7 are free of charge Remote view of the Tour Montparnasse & Eiffel Tower in 2005.jpg
+  Paris/9th arrondissement | wv_26845_0007
+  r, spa facilities, and standard internet service. It has a classic Parisian feel and a views of the Eiffel Tower. Connect Go next
+  Paris/7th arrondissement | wv_26841_0001
+  y to arrive at the tower. Another phenomenal approach is to exit the Metro at Trocadero and see the Eiffel Tower from the other side of the Ecole Militaire. * M F Sa 08:40-11:40 and 14:00-17:00 National Assembly (France)
+  Paris/8th arrondissement | wv_26843_0020
+  the Seine to find yourself in the 7th arrondissement, home to Les Invalides, Musee d'Orsay and the Eiffel Tower * The Etoile is where the 8th meets two other, much more quiet and residential arrondissements, the 16th and 17th
+
+========================================================================
+Лувр: чанков с названием — 42
+  Paris/4th arrondissement | wv_26835_0005
+  é in the 9th arrondissement and the belfry of the town hall of the 1st arrondissement, opposite the Louvre's east façade. Ballu also restored the Tour St Jacques (see below), which was uncovered after restoration work lasting over
+  Paris/1st arrondissement | wv_26827_0021
+  Destination: Paris/1st arrondissement hotel is really close to the Louvre. Rooms on the street offer an impressive view on the Louvre. * Basic rooms start at €89 and doubles at €90 A cozy, competitively priced 24 room hotel with a friendly Art Deco atmosphere. It is located next to the Chatelet Theatre in the very centre of Paris across from
+  Paris/1st arrondissement | wv_26827_0002
+  dissement roughly from east to west, stopping close to important points such as the entrance to the Louvre museum. Lines and are fully automated and it is worth acquainting oneself with their modus operandi and safety precautions before using them. RER C, which runs generally on the left bank of the Seine, does not stop in the 1st, but you can use
+  Paris/1st arrondissement | wv_26827_0010
+  Destination: Paris/1st arrondissement renovations, this small museum near the Louvre houses the Jean Walter and Paul Guillaume Collection, sold to the French Republic on very generous terms and numbering 143 paintings from the late 19th century and the first half of the 20th century (15 Cézannes, 24 Renoirs, 10 Matisses, 12 Picassos, 28 Derains, 22 Sou
+
+========================================================================
+Нотр-Дам: чанков с названием — 36
+  Paris/9th arrondissement | wv_26845_0005
+  mps), just cross boulevard Haussmann and you will find yourself before the Opera Garnier. * 46, rue Notre Dame de Lorette Friendly and English speaking staff. Free Wi-Fi in the rooms. * Metro Grands Boulevards, Cadet A three-star on
+  Paris/5th arrondissement | wv_26837_0004
+  l "Lady and the Unicorn" tapestries, a papal golden rose, and the original heads from the facade of Notre Dame. Religious buildings * Eglise Saint-Étienne-du-Mont St. Geneviève was responsible for saving Paris from the Huns in 451 and her shrine in the church has been a popular place of pilgrimage ever since. The church as
+  Paris/5th arrondissement | wv_26837_0005
+  Destination: Paris/5th arrondissement the facade of Notre Dame. Religious buildings * Eglise Saint-Étienne-du-Mont St. Geneviève was responsible for saving Paris from the Huns in 451 and her shrine in the church has been a popular place of pilgrimage ever since. The church as it stands dates from between 1492 and 1626 and is a mix
+  Paris/4th arrondissement | wv_26835_0000
+  Destination: Paris/4th arrondissement Paris banner Panorama with Notre-Dame.jpg 4th arrondissement of Paris The 4th is a good chunk of what used to be medieval Paris, and you'll find a lot left from that time on both islands and in the narrow streets of the lower Marais. Meanwhile there's lots that's contemporary to look at especially at the C
+
+========================================================================
+Триумфальная арка: чанков с названием — 26
+  Paris/8th arrondissement | wv_26843_0006
+  Egyptian obelisk in the centre of the Place de la Concorde was brought from the Temple of Luxor. l'Arc de Triomphe * Place de l'Étoile, Place Charles de Gaulle admission fee applies for over-17s, free for EU-people under 26 This iconic triumphal arch forms the focus of the main east-west road axis of Paris, running between the Louvre and the Grande Arche de la Défense in the west.
+  Paris/16th arrondissement | wv_26819_0008
+  racing, the venue hosts many of France's top races, including the internationally famous Prix de l'Arc de Triomphe on the first weekend in October. ** Used exclusively for steeplechase racing, and hosts many top-quality races in that discipline. Its flagship event is the Grand Steeple-Chase de Paris. Work * OECD Headquarters & Conference Centre Hosts many international meetings (it
+  Paris/17th arrondissement | wv_26821_0006
+  de Gaulle. The staff is friendly, the rooms aren't large, but they are immaculate. * Mercure Paris Arc de Triomphe Etoile Modern rooms featuring frosted glass and stiff curtain dividers between sleeping areas and bathrooms, which may not be to everybody's liking. The most expensive rooms enjoy terraces with views over the 17th all the way to La Défense. * Novotel Paris 17 Porte d'A
+  Paris/16th arrondissement | wv_26819_0010
+  ments located at 49 avenue Marceau, in the 16th arrondissement, close to the Champs-Élysées and the Arc de Triomphe. Accommodations spread over 6 floors with elevator access in a Haussmann-style building, each featuring a kitchenette and air conditioning. Configurations range from the Tiny room (11 sqm, 2 guests) to the 2-bedroom apartment sleeping up to 6, with several suites offer
+
+========================================================================
+Мост Искусств: чанков с названием — 2
+  Paris | wv_26799_0060
+  this shows that you are making an effort to speak somebody else's language as well as your own. The Pont des Arts (Bridge of the Arts) and just behind, the pont Neuf ("New Bridge", but actually the oldest in Paris) and the île de la Cité. See Highlights are listed below. Detailed information can be found on
+  Paris | wv_26799_0061
+  Destination: Paris own. The Pont des Arts (Bridge of the Arts) and just behind, the pont Neuf ("New Bridge", but actually the oldest in Paris) and the île de la Cité. See Highlights are listed below. Detailed information can be found on each individual district page (click on the name of the sight). Landmarks
+
+========================================================================
+Музей Клюни: чанков с названием — 2
+  Paris/5th arrondissement | wv_26837_0004
+  ly accessible rooftop which allows for a beautiful bird's-eye view of the northern half of Paris. * Musée National Du Moyen Âge €7.50 (€5.50 reduced rate, free under 18, museum card accepted) Musée national du Moyen Âge Hotel de cluny entrance.jpg Housed in a 15th-century abbey, alongside 1st century Gallo-Roman baths, the museum has an extensive collection of medieval art and artifacts. Highli
+  Paris | wv_26799_0064
+  um of arms and armor from the Middle Ages to today. Also contains the tomb of Napoleon Bonaparte. * Musée national du Moyen Âge Hotel de cluny entrance.jpg A medieval museum exhibiting the five "The Lady and the Unicorn" tapestries, housed in a part Roman, part medieval building. * Musee des arts decoratifs.jpg Showcasing eight centuries of French savoir-faire. * Museum of Paris history; exhibi
+
+========================================================================
+ВЫДАЧА RagAssistant.retrieve (модель эмбеддингов, без Qwen)
+
+TOP-K 6: найден город Paris, чанков 6
+1. Paris | wv_26799_0061 | имена в первых 850 символах: ['Эйфелева башня', 'Нотр-Дам', 'Триумфальная арка', 'Мост Искусств']
+   Destination: Paris own. The Pont des Arts (Bridge of the Arts) and just behind, the pont Neuf ("New Bridge", but actually the oldest in Paris) and the île de la Cité. See Highlights are listed below. Detailed information can be found on each individual district page (click on the
+2. Paris | wv_26799_0064 | имена в первых 850 символах: ['Музей Клюни']
+   Destination: Paris painter Eugène Delacroix. * The museum of modern art. The building and adjoining Stravinsky Fountain are attractions in themselves. Closed for renovation until 2030. l'Eglise du Dome, church of Les Invalides, site of Napoleon's tomb * Hôtel des Invalides - 2015
+3. Paris | wv_26799_0000 | имена в первых 850 символах: ['Эйфелева башня']
+   Destination: Paris The Eiffel Tower and the Seine River Paris, the cosmopolitan capital of France, has the reputation of being the most beautiful and romantic of all cities, brimming with historic associations and remaining vastly influential in the realms of culture, art, fashio
+4. Paris/1st arrondissement | wv_26827_0005 | имена в первых 850 символах: []
+   Destination: Paris/1st arrondissement Trussardi, van Cleef & Arpels—several banks, the French Ministry of Justice, and the Hôtel Ritz. * Apr-Sep: daily 09:30-18:30; Oct- Mar: daily 10:00-17:00 €6.10, concessions and guided tours available, under-18 free The ancient medieval fortr
+5. Paris/15th arrondissement | wv_26817_0006 | имена в первых 850 символах: []
+   Destination: Paris/15th arrondissement Jardin Atlantique 2010-04-23.jpg Suspended above the train tracks this garden is surprisingly calm and chilled-out. * The large park occupies the 14 ha formerly occupied by a Citroën factory. Several gardens have specific themes, including w
+6. Paris/12th arrondissement | wv_26811_0001 | имена в первых 850 символах: []
+   Destination: Paris/12th arrondissement garden with several waterworks and other high-quality landscape-art pieces. If you are one of the many people visiting the 12th on business it would be well worth an hour of your time between meetings and dinner to explore the mound, the fou
+
+TOP-K 12: найден город Paris, чанков 12
+1. Paris | wv_26799_0061 | имена в первых 850 символах: ['Эйфелева башня', 'Нотр-Дам', 'Триумфальная арка', 'Мост Искусств']
+   Destination: Paris own. The Pont des Arts (Bridge of the Arts) and just behind, the pont Neuf ("New Bridge", but actually the oldest in Paris) and the île de la Cité. See Highlights are listed below. Detailed information can be found on each individual district page (click on the
+2. Paris | wv_26799_0064 | имена в первых 850 символах: ['Музей Клюни']
+   Destination: Paris painter Eugène Delacroix. * The museum of modern art. The building and adjoining Stravinsky Fountain are attractions in themselves. Closed for renovation until 2030. l'Eglise du Dome, church of Les Invalides, site of Napoleon's tomb * Hôtel des Invalides - 2015
+3. Paris | wv_26799_0000 | имена в первых 850 символах: ['Эйфелева башня']
+   Destination: Paris The Eiffel Tower and the Seine River Paris, the cosmopolitan capital of France, has the reputation of being the most beautiful and romantic of all cities, brimming with historic associations and remaining vastly influential in the realms of culture, art, fashio
+4. Paris/1st arrondissement | wv_26827_0005 | имена в первых 850 символах: []
+   Destination: Paris/1st arrondissement Trussardi, van Cleef & Arpels—several banks, the French Ministry of Justice, and the Hôtel Ritz. * Apr-Sep: daily 09:30-18:30; Oct- Mar: daily 10:00-17:00 €6.10, concessions and guided tours available, under-18 free The ancient medieval fortr
+5. Paris | wv_26799_0003 | имена в первых 850 символах: ['Эйфелева башня', 'Триумфальная арка']
+   Destination: Paris Sorbonne, Montagne Sainte-Geneviève, Église Saint-Séverin, La Grande Mosquée, Le Musée de l'AP-HP. 6e: This contains the western part of the Quartier latin. Jardin du Luxembourg as well as its Sénat, Place Saint-Michel, Église Saint-Sulpice and Saint-Germain-de
+6. Paris/15th arrondissement | wv_26817_0006 | имена в первых 850 символах: []
+   Destination: Paris/15th arrondissement Jardin Atlantique 2010-04-23.jpg Suspended above the train tracks this garden is surprisingly calm and chilled-out. * The large park occupies the 14 ha formerly occupied by a Citroën factory. Several gardens have specific themes, including w
+7. Paris | wv_26799_0062 | имена в первых 850 символах: ['Триумфальная арка']
+   Destination: Paris Charles Garnier and inaugurated in 1875 housing the Paris Opera since it was founded by Louis XIV. A few of the 6 million bodies in the Catacombes de Paris * Used to store the exhumed bones from the overflowing Paris cemetery. The bones of more than 6 million b
+8. Paris | wv_26799_0053 | имена в первых 850 символах: ['Нотр-Дам', 'Триумфальная арка']
+   Destination: Paris orientation of the city on foot while seeing many of Paris' major sights, you can do a West to East walk along the Axe Historique from the Arc de Triomphe to Île de la Cité (Notre Dame). This walk takes about 1-2 hours without any stops. Start at the top of the
+9. Paris/4th arrondissement | wv_26835_0003 | имена в первых 850 символах: ['Нотр-Дам']
+   Destination: Paris/4th arrondissement the Marais area. * Rue des Rosiers, Paris, France 01.jpg The Jewish quarter, with many small delis and shops. Lively on most days except for Saturdays. * Île Saint-Louis - Quai d'Orléans (Paris).jpg Landmarks * Ile de la Cité 6, Place du Parv
+10. Paris/12th arrondissement | wv_26811_0001 | имена в первых 850 символах: []
+   Destination: Paris/12th arrondissement garden with several waterworks and other high-quality landscape-art pieces. If you are one of the many people visiting the 12th on business it would be well worth an hour of your time between meetings and dinner to explore the mound, the fou
+11. Paris/8th arrondissement | wv_26843_0007 | имена в первых 850 символах: ['Триумфальная арка']
+   Destination: Paris/8th arrondissement l'Etoile - 'the star' - with 12 thoroughfares leading off from it. Visitors can purchase a ticket to climb to the top of the arch, from where magnificent views spread out over western Paris. Admission to a small museum devoted to the history
+12. Paris/5th arrondissement | wv_26837_0005 | имена в первых 850 символах: ['Нотр-Дам']
+   Destination: Paris/5th arrondissement the facade of Notre Dame. Religious buildings * Eglise Saint-Étienne-du-Mont St. Geneviève was responsible for saving Paris from the Huns in 451 and her shrine in the church has been a popular place of pilgrimage ever since. The church as it
