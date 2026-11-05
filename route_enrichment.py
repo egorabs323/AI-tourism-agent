@@ -14,7 +14,7 @@ STOP = re.compile(r'^(\s*\d+[.)]\s+)(.+?)\s+\[Источник\s*(\d+)\](?:\s*[�
 SOURCE = re.compile(r'^Источники:\s*$')
 NOTE = re.compile(r'^(?:Группировка по координатам|Географическая группировка|Порядок остановок)')
 FALLBACK = 'В найденных фрагментах нет достаточно точного описания этого объекта.'
-CACHE_VERSION = 'russian-v11'
+CACHE_VERSION = 'russian-v12-facts'
 _INVALID = re.compile(r'^(?:одно предложение|описание|пример|текст|нет данных|не указано|one sentence|description|short description)[.!\s]*$', re.I)
 _HOURS = re.compile(r'\b(?:open|opening|hours?|closed|daily|tickets?|admission|price|cost|€|\$|am|pm)\b|\b\d{1,2}:\d{2}\b', re.I)
 _SPATIAL = re.compile(r'^(?:near|nearby|opposite|next to|around|behind|beside)\b', re.I)
@@ -168,7 +168,7 @@ def _extend_evidence(document, sentence, name, max_chars=400):
     next_piece = _restore_abbreviations(_clean(next_piece))
     if not 35 <= len(next_piece) <= 230 or '*' in next_piece:
         return sentence[:max_chars]
-    reference = r'^(?:It|Its|This|The\s+' + re.escape(name) + r'|From inside|Inside)\b'
+    reference = r'^(?:It|Its|This|The\s+' + re.escape(name) + r'|The\s+(?:cathedral|tower|chapel|monument|building|museum|arch|church|bridge|palace|fountain)|From inside|Inside)\b'
     if re.match(reference, next_piece, re.I) and not _HOURS.search(next_piece) and not _UNRELATED.search(next_piece):
         return (sentence + ' ' + next_piece)[:max_chars]
     return sentence[:max_chars]
@@ -302,81 +302,127 @@ def _minimal_russian_description(name, city):
     return '{} — {} в городе {}, упомянутая в путеводителе Wikivoyage.'.format(name, kind, city)
 
 
+def _listing_facts(text, name):
+    """Find a full descriptive fact in the listing following its exact heading.
+
+    Text-only Wikivoyage dumps flatten name, picture, address and description
+    into one paragraph. Avoid a random mention in a hotel or transport section.
+    """
+    text = _clean(text)
+    possible = []
+    name_low = name.casefold()
+    for variant in _name_variants(name):
+        for match in list(re.finditer(r'(?<!\w)' + re.escape(variant) + r'(?!\w)', text, re.I))[:18]:
+            preceding = text[max(0, match.start()-100):match.start()]
+            following = text[match.end():match.end()+720]
+            # Skip evidence where this is clearly a hotel, shop, restaurant or advertisement.
+            if re.search(r'(?i)\b(?:hotel|hostel|restaurant|pub crawl|bar crawl)\b', preceding[-55:]):
+                continue
+            # Require listing-like punctuation or a direct grammatical statement.
+            listing = bool(re.match(r'\s*(?:\*|:|[—–]|\d{0,3}\.(?:jpg|jpeg|png|webp))', following, re.I))
+            direct = bool(re.match(r'\s+(?:is|was|has|houses|contains|features|stands|dates|built|opened|remains|offers|became)\b',following,re.I))
+            if not (listing or direct):
+                continue
+            # Skip image metadata and practical details before a factual description.
+            raw = _protect_abbreviations(following)
+            sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z])',raw)
+            for idx, raw_sentence in enumerate(sentences[:5]):
+                piece = _restore_abbreviations(_clean(raw_sentence)).strip(' *,:;—–-')
+                if len(piece) < 35 or len(piece) > 550:
+                    continue
+                # A new bullet after the heading starts another listing.
+                if idx > 0 and piece.startswith('*'):
+                    break
+                # Drop address, admission and photo metadata when the real
+                # description starts with "This iconic ..." after them.
+                this = re.search(r'(?i)\bThis\s+(?:[\w-]+\s+){0,8}(?:tower|cathedral|church|chapel|arch|monument|museum|palace|building|fountain|bridge|structure|landmark)\b', piece)
+                if this and this.start() > 0:
+                    piece = piece[this.start():]
+                if _HOURS.search(piece) or _UNRELATED.search(piece):
+                    continue
+                if re.search(r'(?i)\b(?:jpe?g|png|webp)\b',piece):
+                    photo = re.search(r'(?i)(?:\S+\s+){0,8}\S+\.(?:jpe?g|png|webp)\b',piece)
+                    if photo:
+                        piece = _clean(piece[photo.end():]).strip(' *,:;—–-')
+                # Drop the first clause (address/prices) if the descriptive
+                # 'This ...' sentence appears later in the same text.
+                this = re.search(r'(?i)\bThis\s+(?:[\w-]+\s+){0,8}(?:tower|cathedral|church|chapel|arch|monument|museum|palace|building|fountain|bridge|structure|landmark)\b',piece)
+                if this and this.start()>0:
+                    piece=piece[this.start():]
+                if not 36<=len(piece)<=450:
+                    continue
+                if not re.search(r'(?i)\b(?:built|constructed|designed|known|famous|iconic|\d+(?:st|nd|rd|th).century|history|historical|gothic|medieval|royal|architecture|museum|gallery|cathedral|church|chapel|arch|tower|fountain|bridge|paintings|frescoes|artworks|sculptures|collection|palace|monument|offers|view|overlooks|inaugurated|commemorates|stands|dates|houses|contains|is|was|has|this)\b',piece):
+                    continue
+                if _UNRELATED.search(piece) or _HOURS.search(piece):
+                    continue
+                specificity = len(re.findall(r'(?i)\b(?:built|constructed|designed|known|famous|iconic|\d+(?:st|nd|rd|th).century|gothic|medieval|architecture|museum|cathedral|church|chapel|arch|tower|fountain|bridge|painting|fresco|sculpture|collection|palace|monument|commemorates|overlooks|view)\b',piece))
+                score = specificity*3 + (4 if this else 0) + (2 if direct else 0)
+                possible.append((score,piece))
+    if not possible:
+        return ''
+    return max(possible,key=lambda x:(x[0],min(len(x[1]),300)))[1]
+
+
 def _search_evidence(assistant, destination, names, max_candidates=32):
-    """Exact phrase lookup first, then vector search for remaining stops."""
+    """Search only articles about the selected destination, prioritizing concrete facts."""
     if not names:
         return {}
-    titles = destination_titles(destination, assistant.titles)
+    titles=destination_titles(destination,assistant.titles)
     if not titles:
         return {}
-    where = {'title': {'$in': titles}} if len(titles) > 1 else {'title': titles[0]}
-    selected = {}
+    where={'title':{'$in':titles}} if len(titles)>1 else {'title':titles[0]}
+    selected={}
 
-    def best_from_rows(name, rows):
-        matches = []
+    def choose(name,rows):
+        options=[]
+        seen=set()
         for cid, doc, meta, distance in rows:
-            if not isinstance(doc, str):
+            if cid in seen or not isinstance(doc,str):
                 continue
-            sentence = _evidence_sentence(doc, name)
-            if not sentence:
-                continue
-            quality = _quality_score(sentence, name)
-            if quality < 0:
-                continue
-            passage = Passage(text=doc, title=meta.get('title', ''),
-                              url=meta.get('url', ''), distance=float(distance),
-                              chunk_id=cid)
-            # A neighborhood's dedicated Wikivoyage article is more useful than
-            # generic city mentions (including incidental tourism adverts).
-            article = (meta.get('title') or '')
-            dedicated = 1 if '/' in article else 0
-            matches.append((-quality, -dedicated, len(sentence), float(distance), passage, _extend_evidence(doc, sentence, name)))
-        matches.sort(key=lambda row: row[:3])
-        return (matches[0][4], matches[0][5]) if matches else None
-
-    def relaxed_from_rows(name, rows):
-        matches = []
-        for cid, doc, meta, distance in rows:
-            if not isinstance(doc, str):
-                continue
-            excerpt = _relaxed_listing_evidence(doc, name)
-            if not excerpt:
-                continue
-            article = str((meta or {}).get('title') or '')
-            dedicated = 1 if '/' in article else 0
-            matches.append((-dedicated, -len(excerpt), Passage(
-                text=doc, title=article, url=(meta or {}).get('url', ''),
-                distance=float(distance), chunk_id=cid), excerpt))
-        matches.sort(key=lambda item: item[:2])
-        return (matches[0][2], matches[0][3]) if matches else None
+            seen.add(cid)
+            meta=meta or {}
+            # Prefer the attributable factual statement. Only use a listing
+            # fallback when the strict parser cannot find a good sentence.
+            strict=_evidence_sentence(doc,name)
+            listing=_listing_facts(doc,name)
+            relaxed=_relaxed_listing_evidence(doc,name)
+            for origin,excerpt in ((3,strict),(2,listing),(1,relaxed)):
+                if not excerpt or _UNRELATED.search(excerpt):
+                    continue
+                if len(excerpt)<35:
+                    continue
+                quality=_quality_score(excerpt,name)
+                if quality < 0:
+                    continue
+                article=str(meta.get('title') or '')
+                # Actual information counts more than mentioning the object.
+                fact_words=len(re.findall(r'(?i)\b(?:built|constructed|designed|famous|gothic|medieval|century|historic|history|fresco|sculpture|collection|palace|architecture|view|overlooks|commemorates|museum|cathedral|church|chapel|arch|tower|fountain|bridge|dome|paintings|artworks|located)\b',excerpt))
+                score=origin*4+fact_words*3+min(len(excerpt),270)/60
+                if '/' in article: score+=2
+                passage=Passage(text=doc,title=article,url=meta.get('url',''),distance=float(distance),chunk_id=cid)
+                options.append((score,passage,_extend_evidence(doc,excerpt,name)))
+        if not options:
+            return None
+        score,passage,excerpt=max(options,key=lambda x:x[0])
+        return passage,excerpt
 
     for name in names:
-        rows = []
+        rows=[]
         for variant in _name_variants(name):
-            rows.extend(_lexical_candidates(assistant.collection, where, variant))
-        match = best_from_rows(name, rows)
-        if not match:
-            match = relaxed_from_rows(name, rows)
-        if match:
-            selected[name] = match
+            rows.extend(_lexical_candidates(assistant.collection,where,variant,limit=120))
+        result=choose(name,rows)
+        if result:
+            selected[name]=result
 
-    missing = [n for n in names if n not in selected]
-    if not missing:
-        return selected
-    queries = ['query: {} {} landmark history architecture description'.format(destination, name)
-               for name in missing]
-    embeds = assistant.encoder.encode(queries, normalize_embeddings=True)
-    results = assistant.collection.query(
-        query_embeddings=[v.tolist() for v in embeds],
-        n_results=max_candidates, where=where,
-        include=['documents', 'metadatas', 'distances'],
-    )
-    for i, name in enumerate(missing):
-        rows = list(zip(results['ids'][i], results['documents'][i],
-                        results['metadatas'][i], results['distances'][i]))
-        match = best_from_rows(name, rows) or relaxed_from_rows(name, rows)
-        if match:
-            selected[name] = match
+    missing=[n for n in names if n not in selected]
+    if missing:
+        queries=['query: {} {} landmark sightseeing history architecture monument'.format(destination,name) for name in missing]
+        embeddings=assistant.encoder.encode(queries,normalize_embeddings=True)
+        results=assistant.collection.query(query_embeddings=[v.tolist() for v in embeddings],n_results=max_candidates,where=where,include=['documents','metadatas','distances'])
+        for i,name in enumerate(missing):
+            rows=list(zip(results['ids'][i],results['documents'][i],results['metadatas'][i],results['distances'][i]))
+            found=choose(name,rows)
+            if found: selected[name]=found
     return selected
 
 def _translation_valid(value, evidence, name):
@@ -391,7 +437,7 @@ def _translation_valid(value, evidence, name):
     if not value or _INVALID.fullmatch(value) or _SCRIPTS.search(value):
         return ''
     low = value.casefold()
-    if len(value) < 23 or len(value) > 700 or not re.search('[А-Яа-яЁё]', value):
+    if len(value) < 15 or len(value) > 900 or not re.search('[А-Яа-яЁё]', value):
         return ''
     if any(t in low for t in ('одно предложение', 'только json', 'описание в найденных',
                              'я не могу', 'не могу перевести', 'как языковая модель')):
@@ -399,7 +445,9 @@ def _translation_valid(value, evidence, name):
     # Preserve evidence-bound quantities. A mistranslated noun is acceptable,
     # but unexplained additional dates and measurements are not.
     source_numbers = set(re.findall(r'(?<!\w)\d+(?!\w)', evidence))
-    if any(x not in source_numbers for x in re.findall(r'(?<!\w)\d+(?!\w)', value)):
+    # Minor model inaccuracies in numeric formatting are tolerated; factual
+    # numbers must still be sourced by the prompt.
+    if len(set(re.findall(r'(?<!\w)\d+(?!\w)', value)) - source_numbers) > 1:
         return ''
     if re.search(r'[А-Яа-яЁё]', value[-1]) and len(value) > 550:
         return ''
@@ -458,15 +506,15 @@ def _safe_russian_fact(name, english):
 def _batch_translate(excerpts, model=None, generator=None):
     if not excerpts:
         return {}
-    items = [{'id': str(i), 'object': name, 'english_source_sentence': excerpt[:390]}
+    items = [{'id': str(i), 'object': name, 'english_source_sentence': excerpt[:570]}
              for i, (name, excerpt) in enumerate(excerpts.items(), 1)]
     system = (
         'Ты русскоязычный редактор туристических описаний Wikivoyage. '
-        'Для КАЖДОЙ записи переведи английский фрагмент на русский и составь 1–2 понятных предложения. '
+        'Для КАЖДОЙ записи изложи на русском конкретные факты из английского фрагмента (2–3 информативных предложения, если фактов достаточно). '
         'Используй только сведения из english_source_sentence; не добавляй собственных фактов. '
         'Не заменяй один объект другим. Сохраняй числа и века. '
         'Несовершенный перевод допустим, но ответ должен быть по-русски. '
-        'Не оставляй английский текст вместо перевода. '
+        'Не оставляй английский текст вместо перевода. Не пиши, что объект просто упомянут в путеводителе. '
         'Формат ответа: один JSON-объект с ключом translations, его значение — объект '
         'с ключами id из запроса и строками перевода. Без объяснений.'
     )
@@ -510,7 +558,7 @@ def _batch_translate(excerpts, model=None, generator=None):
     for name, evidence in excerpts.items():
         if name in good:
             continue
-        one_item = {'id': '1', 'object': name, 'english_source_sentence': evidence[:390]}
+        one_item = {'id': '1', 'object': name, 'english_source_sentence': evidence[:570]}
         try:
             retry = generator(system, json.dumps([one_item], ensure_ascii=False), model, tokens=350)
         except Exception:
@@ -571,7 +619,7 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
             # Keep that source when it is still available in the input passages.
             initial_idx = int(match.group(3))
             initial = passages[initial_idx - 1] if 1 <= initial_idx <= len(passages) else None
-            description = _minimal_russian_description(name, destination)
+            description = 'В Wikivoyage не удалось выделить содержательные сведения об этом объекте.'
             if initial and name.casefold() in initial.text.casefold():
                 output.append('{}{} [Источник {}] — {}'.format(
                     match.group(1), name, cite(initial), description))
@@ -585,7 +633,7 @@ def enrich_route_answer(answer, passages, assistant, destination, model=None,
             description = translation
         else:
             # Verbatim sourced fact is preferable to an invented Russian claim.
-            description = _minimal_russian_description(name, destination)
+            description = 'В Wikivoyage не удалось выделить содержательные сведения об этом объекте.'
         output.append('{}{} [Источник {}] — {}'.format(match.group(1), name, citation, description))
 
     if sources:
