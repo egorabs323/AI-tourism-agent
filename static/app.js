@@ -1,6 +1,8 @@
 const $ = id => document.getElementById(id);
 let currentId = null;
 let busy = false;
+let uploading = false;
+let authMode = 'login';
 async function api(path, options={}) {
   const response = await fetch(path,{headers:{'Content-Type':'application/json'},...options});
   if (!response.ok) {
@@ -91,18 +93,18 @@ async function refreshConversations(){
     const select=document.createElement('span');select.className='conv-label';select.textContent=c.title;
     const del=document.createElement('button');del.className='delete';del.textContent='×';del.title='Удалить диалог';
     row.append(select,del);row.addEventListener('click',()=>openConversation(c.id));
-    del.addEventListener('click',async e=>{e.stopPropagation();if(busy || !confirm('Удалить диалог?'))return;await api(`/api/conversations/${c.id}`,{method:'DELETE'});if(currentId===c.id){currentId=null;showEmpty()}await refreshConversations()});
+    del.addEventListener('click',async e=>{e.stopPropagation();if(busy || uploading || !confirm('Удалить диалог?'))return;await api(`/api/conversations/${c.id}`,{method:'DELETE'});if(currentId===c.id){currentId=null;showEmpty()}await refreshConversations()});
     $('conversations').append(row);
   }
 }
 async function openConversation(id){
-  if(busy)return;currentId=id;error();
+  if(busy || uploading)return;currentId=id;error();
   const records=await api(`/api/conversations/${id}/messages`);$('messages').replaceChildren();
   if(!records.length)showEmpty();else for(const item of records)addMessage(item.role,item.content,item.sources);
-  await refreshConversations();scrollBottom();
+  await refreshConversations();await refreshDocuments();scrollBottom();
 }
 async function createConversation(){
-  if(busy)return;
+  if(busy || uploading)return;
   const data=await api('/api/conversations',{method:'POST',body:JSON.stringify({})});
   await openConversation(data.id);$('question').focus();
 }
@@ -114,14 +116,114 @@ async function send(){
     addMessage('user',question);$('question').value='';
     const pending=addMessage('assistant','Ищу информацию в базе знаний…');
     try{
-      const result=await api(`/api/conversations/${currentId}/messages`,{method:'POST',body:JSON.stringify({question,destination:$('destination').value.trim() || null,top_k:6})});
+      const result=await api(`/api/conversations/${currentId}/messages`,{method:'POST',body:JSON.stringify({question,destination:$('destination').value.trim() || null,mode:$('request-mode').value,top_k:6})});
       pending.remove();addMessage('assistant',result.answer,result.sources);
       await refreshConversations();
     }catch(e){pending.remove();error(e.message);$('question').value=question;}
   }catch(e){error(e.message)}finally{busy=false;$('send').disabled=false;$('send').textContent='Отправить ↗';}
 }
+
+async function refreshDocuments(){
+  const box=$('documents');box.replaceChildren();
+  if(!currentId){$('upload-status').textContent='Создай диалог, чтобы добавить документы.';return;}
+  const docs=await api(`/api/conversations/${currentId}/documents`);
+  $('upload-status').textContent=docs.length ? `${docs.length} документ(ов) в этом диалоге` : 'Документы пока не загружены.';
+  for(const doc of docs){
+    const chip=document.createElement('div');chip.className='document-chip';
+    const link=document.createElement('a');link.textContent=doc.filename;
+    link.href=`/api/conversations/${currentId}/documents/${doc.id}/download`;
+    link.title=`${doc.filename} · ${doc.chunks} чанков`;link.target='_blank';
+    const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.title='Удалить документ';
+    remove.addEventListener('click',async()=>{
+      if(busy || uploading || !confirm(`Удалить ${doc.filename}?`))return;
+      try{await api(`/api/conversations/${currentId}/documents/${doc.id}`,{method:'DELETE'});await refreshDocuments();}
+      catch(e){error(e.message)}
+    });
+    chip.append(link,remove);box.append(chip);
+  }
+}
+async function uploadDocument(){
+  if(busy || uploading)return;
+  const selected=$('file-input').files[0];
+  if(!selected){error('Выбери PDF, DOCX или TXT.');return;}
+  if(selected.size>5*1024*1024){error('Файл должен быть не больше 5 МБ.');return;}
+  uploading=true;$('upload-btn').disabled=true;$('upload-status').textContent='Идёт обработка и индексация файла…';error();
+  try{
+    if(!currentId){const conv=await api('/api/conversations',{method:'POST',body:'{}'});currentId=conv.id;}
+    const form=new FormData();form.append('file',selected);
+    // При отправке FormData нельзя указывать Content-Type вручную.
+    const response=await fetch(`/api/conversations/${currentId}/documents`,{method:'POST',body:form});
+    if(!response.ok){let detail=`Ошибка HTTP ${response.status}`;try{detail=(await response.json()).detail || detail}catch(_){}throw new Error(detail)}
+    const result=await response.json();$('file-input').value='';
+    await refreshConversations();await refreshDocuments();
+    $('upload-status').textContent=`Загружено: ${result.filename}, чанков: ${result.chunks}.`;
+  }catch(e){error(e.message);$('upload-status').textContent='Не удалось загрузить документ.'}
+  finally{uploading=false;$('upload-btn').disabled=false;}
+}
+async function checkAuth() {
+  try {
+    const me = await api('/api/auth/me');
+    $('auth-screen').hidden = true;
+    $('main-layout').hidden = false;
+    $('account-name').textContent = me.username;
+    currentId = null;
+    await refreshConversations();
+    await refreshDocuments();
+  } catch(e) {
+    $('main-layout').hidden = true;
+    $('auth-screen').hidden = false;
+  }
+}
+function selectAuthMode(mode) {
+  authMode=mode;
+  $('mode-login').classList.toggle('selected', mode==='login');
+  $('mode-register').classList.toggle('selected', mode==='register');
+  $('auth-submit').textContent=mode==='login'?'Войти':'Зарегистрироваться';
+  $('auth-error').hidden=true;
+  $('auth-password').setAttribute('autocomplete', mode==='login'?'current-password':'new-password');
+}
+$('mode-login').addEventListener('click',()=>selectAuthMode('login'));
+$('mode-register').addEventListener('click',()=>selectAuthMode('register'));
+$('auth-form').addEventListener('submit',async e=>{
+  e.preventDefault();
+  $('auth-error').hidden=true; $('auth-submit').disabled=true;
+  try {
+    await api(`/api/auth/${authMode}`, {method:'POST',body:JSON.stringify({username:$('auth-username').value,password:$('auth-password').value})});
+    $('auth-password').value='';
+    await checkAuth();
+  } catch(err) {
+    $('auth-error').hidden=false; $('auth-error').textContent=err.message;
+  } finally { $('auth-submit').disabled=false; }
+});
+$('logout-btn').addEventListener('click',async()=>{
+  if (busy || uploading) return;
+  try {await api('/api/auth/logout',{method:'POST'});} catch(e) {error(e.message);return;}
+  currentId=null; $('messages').replaceChildren(); showEmpty();
+  $('conversations').replaceChildren(); $('documents').replaceChildren();
+  $('main-layout').hidden=true; $('auth-screen').hidden=false;
+});
+$('upload-btn').addEventListener('click',uploadDocument);
+
 $('chat-form').addEventListener('submit',e=>{e.preventDefault();send()});
 $('question').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
 $('new-chat').addEventListener('click',()=>createConversation().catch(e=>error(e.message)));
-document.querySelectorAll('[data-prompt]').forEach(button=>button.addEventListener('click',()=>{$('question').value=button.dataset.prompt;send()}));
-refreshConversations().catch(e=>error(e.message));
+document.querySelectorAll('[data-prompt]').forEach(button=>button.addEventListener('click',()=>{const prompt=button.dataset.prompt;$('request-mode').value=/маршрут|за один день|за два дня/i.test(prompt)?'route':/музе/i.test(prompt)?'recommendations':'reference';$('request-mode').dispatchEvent(new Event('change'));$('question').value=prompt;send()}));
+checkAuth().catch(e=>error(e.message));
+
+// Подсказки зависят от выбранного режима; без новых запросов к серверу.
+const modeExamples = {
+  reference:['Например: что известно о Колизее?', 'Вопросы о местах и фактах по Wikivoyage.'],
+  route:['Например: составь маршрут по Парижу на два дня', 'План по дням без точных пешеходных расстояний.'],
+  recommendations:['Например: посоветуй интересные музеи Парижа', 'Подбор мест на основе описаний из базы знаний.'],
+  transport:['Например: как передвигаться по Лондону?', 'Общественный транспорт и советы по передвижению.'],
+  food:['Например: какие местные блюда попробовать в Риме?', 'Местная кухня, кафе и рестораны из путеводителей.'],
+  accommodation:['Например: в каком районе Парижа лучше остановиться?', 'Районы и варианты проживания из путеводителей.'],
+  tips:['Например: что полезно знать перед поездкой в Берлин?', 'Практические советы из туристических статей.']
+};
+function updateModeHint(){
+  const item=modeExamples[$('request-mode').value]||modeExamples.reference;
+  $('question').placeholder=item[0];
+  $('mode-hint').textContent=item[1];
+}
+$('request-mode').addEventListener('change', updateModeHint);
+updateModeHint();
