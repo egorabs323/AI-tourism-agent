@@ -1,4 +1,3 @@
-"""Локальные тесты этапа загрузки без использования ChromaDB и Ollama."""
 import io
 import sys
 import types

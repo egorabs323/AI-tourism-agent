@@ -1,8 +1,3 @@
-"""Reference RAG: bilingual retrieval, object ownership and bounded fact generation.
-
-Names and dates come from the local corpus. There is no per-city POI dictionary.
-The LLM rewrites the search query and paraphrases a few isolated source facts.
-"""
 from __future__ import annotations
 
 import json
@@ -49,8 +44,6 @@ def reference_search_query(question, history, destination=None, generator=None):
               _rewrite(question, previous, destination, generator))
     from context_query import REFERENCE
     if previous and REFERENCE.search(question):
-        # Resolve only the prior user's entity. Never feed the assistant's
-        # previous (possibly erroneous) factual answer back into retrieval.
         prior = (_cached_query(previous[-1], previous[:-1], destination, model) if generator is None else
                  _rewrite(previous[-1], previous[:-1], destination, generator))
         inherited = prior.names
@@ -88,15 +81,12 @@ def _rewrite(question, previous, destination, generator):
     query = value.get('query')
     if not isinstance(query, str) or not 5 <= len(query) <= 400:
         query = question
-    # Query rewriting cannot introduce a fabricated construction year.
     allowed = set(re.findall(r'\d+', question + ' '.join(previous)))
     if set(re.findall(r'\d+', query)) - allowed:
         query = re.sub(r'\b\d+\b', '', query)
     raw_names = [value['entity']] if isinstance(value.get('entity'), str) and value['entity'].strip() else value.get('names', [])
     raw_names = raw_names if isinstance(raw_names, list) else []
     raw_names = [a or b for a, b in re.findall(r'«([^»]{3,90})»|"([^"\n]{3,90})"', question)] + raw_names
-    # Small models sometimes translate the query but leave `entity` in Russian.
-    # Recover proper names from that English query, then verify them in sources.
     stop = {'what', 'when', 'where', 'how', 'who', 'why', 'the', 'tell', 'explain', 'can', 'which', 'list'}
     for candidate in _candidate_names(query):
         candidate = re.sub(r"['’]s$", '', candidate)
@@ -186,8 +176,6 @@ def _source_names(query, passages, question, generator=None):
             break
     if not candidates:
         return ()
-    # Resolve translation/transliteration against actual source names, rather
-    # than accepting a made-up English name from query rewriting.
     system = ('Match the place in the user question to ONE of the source names. '
               'Use conventional translations of place names. Return JSON with key name. '
               'Copy the selected source name exactly. If the requested place is absent, '
@@ -202,7 +190,6 @@ def _source_names(query, passages, question, generator=None):
 
 
 def _owned_sentences(passage, names):
-    """Keep a listing or an independently named subject, never a nearby mention."""
     found = []
     for record in _records(passage.text):
         body = re.sub(r'^Destination:[^\n]*\n', '', record.text).strip()
@@ -221,8 +208,6 @@ def _owned_sentences(passage, names):
         heading = name_key(record.heading) in {name_key(n) for n in names}
         named = [_named_subject(s, names) for s in sentences]
         generic_start = bool(re.match(r'^(?:This|It|Its|The (?:building|bridge|gate|tower|clock|museum|temple))\b', sentences[0]))
-        # A photo may use a native name. Resolve a pronoun only when the next
-        # independent subject explicitly identifies that same building.
         first_named = next((i for i, yes in enumerate(named[:5]) if yes), None)
         foreign = False
         for sentence in sentences[:first_named or 0]:
@@ -251,12 +236,6 @@ def _owned_sentences(passage, names):
 
 
 def _linked_records(passages, names, facts):
-    """Recover a lost subject only through a unique, identical linking clause.
-
-    Flattened Wikivoyage sometimes keeps 'connects A with B' after a photo but
-    drops the listing title. Another article must explicitly name its subject.
-    A second named subject with that clause makes the link ambiguous.
-    """
     def link_key(text):
         return ' '.join(w for w in name_key(text).split() if w not in {'the', 'a', 'an'})
     proofs = {}
@@ -286,14 +265,11 @@ def _linked_records(passages, names, facts):
 
 
 def _airport_context(passages, names):
-    """Stop at the next airport heading before selecting transport facts."""
     found = []
     for passage in passages:
         for name in names:
             for match in _pattern(name).finditer(passage.text):
                 tail = passage.text[match.end():match.end() + 2200]
-                # An airport heading is followed by a description, not a
-                # comparison ('closer than ...') or a taxi fare table.
                 if not re.match(r"\s*(?:Airport\s+)?(?:[A-Z][\w’'-]*['’]s\s+main airport|is\s+(?:the|a)\b)", tail):
                     continue
                 next_airport = re.search(r'\b(?:[A-Z][\w-]+\s+){1,4}(?:International\s+)?Airport\s+(?=Located\b|This\b|The\b)', tail)
@@ -320,7 +296,6 @@ def _facets(question):
 
 
 def reference_context(question, query, hits, articles=(), generator=None):
-    """Expand vector hits to original records, then select up to three facts."""
     if asks_current_values(question):
         return []
     pool = list(articles) or list(hits)
@@ -340,8 +315,6 @@ def reference_context(question, query, hits, articles=(), generator=None):
             if transport:
                 facts = transport
     else:
-        # General questions still use semantic retrieval. They do not get the
-        # complete city article or unrelated paragraphs appended as context.
         facts = [(s, p, 0) for p in hits[:4] for s in _reference_sentences(p.text)
                  if 20 <= len(s) <= 600 and not s.startswith('Destination:')]
     ranked = []
@@ -463,11 +436,6 @@ def _valid_fact(text, quote):
 
 
 def _prepared_fact(quote, question=''):
-    """Short source-derived fields make a 1.7B model's task manageable.
-
-    These rules describe relations, never particular places. Original English
-    sentences remain available for number, type and citation validation.
-    """
     if re.search('[А-Яа-яЁё]', quote):
         return quote
     if re.search(r'\b(?:has|have|is|are|was|were)\s+(?:no|not)\b', quote, re.I):
@@ -536,13 +504,11 @@ def _prepared_fact(quote, question=''):
     statues = re.search(r'\bBaroque statues \(a total of (\d+)\).*\b(\d+)(?:th|st|nd|rd) century', quote)
     if statues:
         return 'Барочные статуи начали устанавливать в {} веке; их {}.'.format(statues.group(2), statues.group(1))
-    # Reuse only generic literal relations (height, dates, style, collection).
     from route_enrichment import _source_summary
     return _source_summary('', quote)
 
 
 def _bounded_paraphrase(text, prepared):
-    """Keep a clear source-derived phrase if generation changes its vocabulary."""
     if not prepared:
         return text
     if not isinstance(text, str):

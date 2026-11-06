@@ -1,4 +1,3 @@
-"""Локальная регистрация и cookie-сессии, совместимо с Python 3.9."""
 import hashlib
 import hmac
 import re
@@ -21,7 +20,6 @@ def init_auth(db):
         token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         expires TEXT NOT NULL
     )''')
-    # Existing dialogues are not silently made public to newly registered users.
     cols = {r['name'] for r in db.execute('PRAGMA table_info(conversations)').fetchall()}
     if 'user_id' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN user_id TEXT')
@@ -46,7 +44,6 @@ def create_user(db, username, password):
                    (user_id, username, salt, hash_password(password, salt), datetime.now(timezone.utc).isoformat()))
     except sqlite3.IntegrityError:
         raise HTTPException(409, 'Этот логин уже используется')
-    # Only first registered account inherits legacy local conversations.
     if first_user:
         db.execute('UPDATE conversations SET user_id=? WHERE user_id IS NULL', (user_id,))
     return user_id
@@ -56,7 +53,6 @@ def login_user(db, username, password):
     row = db.execute('SELECT id,password_salt,password_hash FROM users WHERE username=? COLLATE NOCASE',
                      (username.strip(),)).fetchone()
     if row is None:
-        # Reduce difference between valid and invalid usernames.
         hash_password(password, '0' * 32)
         raise HTTPException(401, 'Неверный логин или пароль')
     if not hmac.compare_digest(hash_password(password, row['password_salt']), row['password_hash']):
@@ -88,7 +84,6 @@ def revoke_session(db, token):
 
 
 def check_origin(request):
-    # Defense in depth: same-site cookies plus exact origin check for browser writes.
     origin = request.headers.get('origin')
     if origin and origin.rstrip('/') != str(request.base_url).rstrip('/'):
         raise HTTPException(403, 'Недопустимый Origin')

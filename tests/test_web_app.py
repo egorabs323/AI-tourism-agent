@@ -1,4 +1,3 @@
-"""Lightweight API smoke test, without real ChromaDB/Ollama."""
 import tempfile
 import unittest
 from pathlib import Path

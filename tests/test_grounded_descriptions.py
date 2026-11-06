@@ -1,4 +1,3 @@
-"""Regression cases for object ownership; facts below are synthetic fixtures."""
 import json
 import unittest
 from pathlib import Path

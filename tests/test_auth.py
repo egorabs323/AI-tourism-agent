@@ -1,4 +1,3 @@
-"""Запуск из корня проекта: python -m unittest discover -s tests -p test_auth.py -v"""
 import sqlite3
 import tempfile
 import unittest

@@ -1,6 +1,3 @@
-"""Индексация загруженных PDF/DOCX/TXT в отдельную коллекцию ChromaDB.
-Совместимо с Python 3.9. Не изменяет основную коллекцию Wikivoyage.
-"""
 from __future__ import annotations
 
 import io
@@ -87,8 +84,6 @@ def split_text(text: str, words_per_chunk: int = 180, overlap: int = 30) -> List
 
 
 def get_collection(main_assistant):
-    # Используем публичный API, а не внутреннее поле collection._client:
-    # оно может вернуть низкоуровневый объект без методов get/count/query.
     import chromadb
     from pathlib import Path
     db_dir = Path(__file__).resolve().parent / 'data' / 'chroma'
@@ -101,7 +96,6 @@ def get_collection(main_assistant):
 def index_document(main_assistant, conversation_id: str, document_id: str, filename: str, text: str) -> int:
     chunks = split_text(text)
     collection = get_collection(main_assistant)
-    # Тот же энкодер, который уже используется в основном RAG: новая модель не загружается.
     for start in range(0, len(chunks), 12):
         part = chunks[start:start + 12]
         vectors = main_assistant.encoder.encode(['passage: ' + chunk for chunk in part],
@@ -117,8 +111,6 @@ def index_document(main_assistant, conversation_id: str, document_id: str, filen
 
 def search_documents(main_assistant, conversation_id: str, question: str, count: int = 3) -> List[Passage]:
     collection = get_collection(main_assistant)
-    # Фильтр по ID диалога обязателен: чужие документы не ищем.
-    # Проверяем доступность записей, чтобы не вызывать query() на пустой коллекции.
     existing = collection.get(where={'conversation_id': conversation_id}, limit=1, include=[])
     if not existing['ids']:
         return []
@@ -129,7 +121,6 @@ def search_documents(main_assistant, conversation_id: str, question: str, count:
     passages = []
     for chunk_id, doc, meta, distance in zip(results['ids'][0], results['documents'][0],
                                              results['metadatas'][0], results['distances'][0]):
-        # Локальная ссылка разрешена только в рамках того же диалога.
         document_id = meta['document_id']
         link = 'http://127.0.0.1:8000/api/conversations/{}/documents/{}/download'.format(conversation_id, document_id)
         passages.append(Passage(text=doc, title='Документ: ' + meta['title'], url=link,

@@ -1,4 +1,3 @@
-"""Recommendation regressions on synthetic sources, without live models."""
 import json
 import unittest
 from unittest.mock import Mock

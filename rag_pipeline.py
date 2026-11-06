@@ -1,8 +1,3 @@
-"""Этап 3: географически ограниченный поиск и RAG на существующей ChromaDB.
-
-Ничего не перезаписывает в базе. Для запросов с известным городом применяет
-metadata-фильтр title ($in) по статье города и его подразделам.
-"""
 from __future__ import annotations
 
 import json
@@ -19,11 +14,6 @@ from build_vector_db import MODEL_NAME, create_collection
 
 
 class ArticleStore:
-    """Byte offsets, not a second copy of the corpus or a vector index.
-
-    The JSONL is streamed once when its size/mtime changes. Subsequent reads
-    seek only the requested city's articles. No user database is touched.
-    """
     _lock = threading.Lock()
 
     def __init__(self, path: Path, cache: Path = Path('data/cache/article_offsets.sqlite3')):
@@ -83,8 +73,6 @@ class ArticleStore:
                                       row['url'], 0.0, 'article:' + str(row['article_id'])))
         return tuple(result)
 
-# Словарь только помогает находить destination. Не подменяет базу знаний.
-# Неоднозначные топонимы (например, Georgia) лучше передавать через --destination.
 RUSSIAN_ALIASES = {
     "рим": "Rome", "рима": "Rome", "риме": "Rome", "риму": "Rome",
     "париж": "Paris", "парижа": "Paris", "париже": "Paris",
@@ -121,7 +109,6 @@ def title_index(path: Path) -> set:
 
 
 def resolve_title(destination: str, titles: set) -> Optional[str]:
-    """Найти точное название статьи, не угадывая отсутствующую географию."""
     value = destination.strip()
     if not value:
         return None
@@ -133,14 +120,11 @@ def resolve_title(destination: str, titles: set) -> Optional[str]:
 
 def detect_destination(question: str, titles: set) -> Optional[str]:
     lowered = question.casefold()
-    # Ищем длинные выражения в первую очередь, чтобы не спутать город и страну.
     for alias in sorted(RUSSIAN_ALIASES, key=len, reverse=True):
         if re.search(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", lowered):
             title = resolve_title(RUSSIAN_ALIASES[alias], titles)
             if title:
                 return title
-    # Для англоязычных вопросов проверяем упоминание заголовка статьи.
-    # Предпочитаем заголовки без '/' и разумной длины, избегаем общих слов.
     ignore = {"See", "Go", "Eat", "Sleep", "Do", "Understand", "Travel", "Get in", "Buy"}
     candidates = []
     for title in titles:
@@ -152,7 +136,6 @@ def detect_destination(question: str, titles: set) -> Optional[str]:
 
 
 def destination_titles(destination: str, titles: set) -> list:
-    """Вернуть точную статью и городские подстраницы типа Rome/Colosseo."""
     root = resolve_title(destination, titles)
     if root is None:
         raise ValueError(f"В базе нет статьи с названием {destination!r}. Проверь название или используй название Wikivoyage на английском.")
@@ -182,8 +165,6 @@ class RagAssistant:
 
     @property
     def encoder(self):
-        # Route records do not need embeddings. Load E5 only for vector search
-        # or uploaded documents, leaving RAM available to the local LLM.
         if self._encoder is None:
             from sentence_transformers import SentenceTransformer
             self._encoder = SentenceTransformer(self._model_name)
@@ -195,11 +176,6 @@ class RagAssistant:
 
     def retrieve(self, question: str, destination: Optional[str] = None,
                  top_k: int = 8, mode: Optional[str] = None) -> tuple[list, Optional[str]]:
-        """Городской поиск: несколько коротких запросов и лёгкое CPU-ранжирование.
-
-        Не изменяет коллекцию и не вызывает LLM. Для НЕмаршрутных вопросов
-        используется один обычный поисковый запрос.
-        """
         if not 1 <= top_k <= 30:
             raise ValueError("top_k должен быть от 1 до 30")
         identified = (resolve_title(destination, self.titles) if destination
@@ -218,7 +194,6 @@ class RagAssistant:
             question.casefold()))
         queries = [question]
         if route_intent and identified:
-            # Вместо расширения контекста: три коротких запроса, один batch encode.
             queries = [
                 f"{identified} must see top tourist attractions famous landmarks",
                 f"{identified} historic centre main sights monuments churches squares",
@@ -226,8 +201,6 @@ class RagAssistant:
             ]
         vectors = self.encoder.encode(
             ["query: " + q for q in queries], normalize_embeddings=True)
-        # Уменьшаем количество кандидатов и число Python-операций по сравнению
-        # с предыдущим вариантом, не уменьшая число выходных фрагментов.
         per_query = max(12, min(32, top_k * 4)) if route_intent else top_k
         result = self.collection.query(
             query_embeddings=[vector.tolist() for vector in vectors],
@@ -246,15 +219,11 @@ class RagAssistant:
                         "passage": Passage(doc, meta.get("title", ""),
                                            meta.get("url", ""), float(dist), cid),
                     }
-                # Reciprocal rank fusion: повтор в нескольких результатах полезен.
                 candidates[cid]["score"] += 1.0 / (12.0 + rank)
 
         if route_intent and identified:
             for item in candidates.values():
                 p = item["passage"]
-                # Структурированное извлечение смотрит первые ~850 символов.
-                # Поэтому оцениваем прежде всего тот же фрагмент, а не хвост,
-                # который Qwen вообще не увидит.
                 head = p.text[:850].casefold()
                 title = p.title.casefold()
                 score = item["score"]
@@ -275,7 +244,6 @@ class RagAssistant:
                 if re.search(r"\b(?:ticket prices?|discount|admission fee|"
                              r"telephone|opening hours|monday to friday)\b", head):
                     score *= 0.75
-                # Не выдаём за географический расчёт — это только текстовый приоритет.
                 item["score"] = score
 
         ordered = sorted(candidates.values(), key=lambda row: row["score"], reverse=True)
@@ -338,7 +306,6 @@ SYSTEM = """Ты — туристический справочник с дост
 """
 
 def ollama_configuration(model: Optional[str] = None) -> tuple[str, str]:
-    """Возвращает (URL локального API, имя модели). Ключи не требуются."""
     url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").strip().rstrip("/")
     selected = (model or os.environ.get("OLLAMA_MODEL") or "qwen3:1.7b").strip()
     if not url.startswith(("http://127.0.0.1:", "http://localhost:")):
@@ -350,7 +317,6 @@ def ollama_configuration(model: Optional[str] = None) -> tuple[str, str]:
 
 def answer_with_llm(question: str, passages: list, history: list,
                     model: Optional[str] = None, without_rag: bool = False) -> str:
-    """Генерация через локальный REST API Ollama (/api/chat)."""
     import urllib.error
     import urllib.request
 

@@ -1,9 +1,3 @@
-"""Preference-aware recommendations from named, object-owned source records.
-
-Retrieval and paraphrasing use the existing E5/Chroma and local LLM. Object
-names, category checks, exclusions, count and citations are controlled by code.
-There are no city-specific lists of places.
-"""
 from __future__ import annotations
 
 import json
@@ -137,7 +131,6 @@ def prepare_recommendations(question, history, destination=None, generator=None)
              if any(re.search(r'(?<!\w)(?:' + pattern + r')(?!\w)', c, re.I) for c in positive)}
     excluded_kinds = set()
     for clause in negative:
-        # A named exception excludes that place, not its entire category.
         if re.search(r'\b(?:кроме|except|excluding)\b', clause, re.I):
             continue
         excluded_kinds.update(kind for kind, pattern in _CATEGORY.items()
@@ -228,8 +221,6 @@ def _record_names(record, city, city_aliases=()):
                         repeated.append(span)
             if repeated:
                 extra.append(max(repeated, key=lambda n: len(n.split())))
-        # Consecutive names of two facilities, such as a nearby museum followed
-        # by the actual gallery's photo caption, are not one institution.
         words = name.split()
         labels = [(i, _kind(w)) for i, w in enumerate(words) if _kind(w)]
         if len(labels) == 2:
@@ -239,7 +230,6 @@ def _record_names(record, city, city_aliases=()):
                 extra.extend([' '.join(words[:split]), ' '.join(words[split:])])
                 if name in extra:
                     extra.remove(name)
-    # User documents may be in Russian and need no English place-name inventory.
     extra.extend(a or b for a, b in re.findall(r'(?:Музей|Парк|Дворец|Сад|Галерея)\s*[«"]([^»"]+)[»"]|^([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){1,3})\s+—', record.text))
     result = []
     for name in extra:
@@ -280,8 +270,6 @@ def _object_facts(record, passage, name, names):
     sentences = _reference_sentences(prose)
     named_kind = _kind(name)
     if named_kind and name_key(record.heading) == name_key(name):
-        # The bullet parser preserves a listing title from the previous span.
-        # Accept it only with an explicit matching definition in its own body.
         definition = re.search(r'\b(?:A |An |This |The |Urban |Public |Botanical |Baroque )?'
                                r'(?:park|garden|museum|palace)\b[^.!?]*[.!?]', prose)
         if definition and _definition_kind(definition.group()) == named_kind:
@@ -296,8 +284,6 @@ def _object_facts(record, passage, name, names):
             if self_definition:
                 body_kind = 'park' if self_definition.group(1) == 'nature reserve' else _kind(self_definition.group(1))
         aliases = [n for n in names if _kind(n) == named_kind and n in caption]
-        # Two coordinated objects of the same type cannot share an anonymous
-        # caption. Parenthetical translations of one name are allowed.
         ambiguous = len(aliases) > 1 and ' and ' in caption
         before_name = caption[:caption.find(name)].rstrip() if name in caption else ''
         relation = bool(re.search(r'\b(?:nearby|near|from|of|at|behind|beside|opposite)(?:\s+the)?$', before_name, re.I))
@@ -318,8 +304,6 @@ def _object_facts(record, passage, name, names):
             verb = re.match(r'\s*(?:,\s*[^,]{1,130},\s*)?(?:is|was|are|were)\b', verb_tail, re.I)
         if independent and verb:
             facts.append((sentence[match.start():].strip(), 3))
-        # Explicit inverted definitions: 'the national museum is X, ...' and
-        # 'south of A is X, the first public park ...'. Mere proximity fails.
         inverted = re.search(r'\b(?:is|are)\s+(?:the\s+)?$', before, re.I)
         if inverted and (named_kind or _kind(before)):
             facts.append((sentence.strip(), 3))

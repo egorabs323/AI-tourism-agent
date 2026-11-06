@@ -1,11 +1,5 @@
-"""Lightweight reference resolution for retrieval queries. Python 3.9+.
-
-This only enriches search; it does not claim facts or use a second LLM.
-"""
 import re
 
-# Explicit surface forms in tourist questions, with English Wikivoyage titles
-# for multilingual retrieval. Extend as needed for other destinations.
 LANDMARK_ALIASES = (
     (re.compile(r'\bколизе[йяюем]\b', re.I), 'Colosseum'),
     (re.compile(r'\bпантеон[а-я]*\b', re.I), 'Pantheon'),
@@ -24,14 +18,8 @@ REFERENCE = re.compile(
 
 
 def contextual_search_query(question, history, destination=None):
-    """Return a more explicit retrieval query for pronoun follow-ups.
-
-    Selects the last explicitly mentioned known place in *user* turns.
-    Does not rewrite the actual question shown to the user.
-    """
     if not REFERENCE.search(question):
         return question
-    # If the current question already names a place, it is self-contained.
     if any(pattern.search(question) for pattern, _ in LANDMARK_ALIASES):
         return question
     entity = None
@@ -48,7 +36,6 @@ def contextual_search_query(question, history, destination=None):
     if not entity:
         return question
     base = '{} {} {}'.format(destination or '', entity, question).strip()
-    # Make explicit the relational intent, not specific unsupported results.
     if re.search(r'\b(?:рядом|поблизости|неподал[её]ку|около)\b', question, re.I):
         base += ' nearby attractions landmarks walking distance'
     return base

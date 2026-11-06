@@ -155,7 +155,6 @@ async function uploadDocument(){
   try{
     if(!currentId){const conv=await api('/api/conversations',{method:'POST',body:'{}'});currentId=conv.id;}
     const form=new FormData();form.append('file',selected);
-    // При отправке FormData нельзя указывать Content-Type вручную.
     const response=await fetch(`/api/conversations/${currentId}/documents`,{method:'POST',body:form});
     if(!response.ok){let detail=`Ошибка HTTP ${response.status}`;try{detail=(await response.json()).detail || detail}catch(_){}throw new Error(detail)}
     const result=await response.json();$('file-input').value='';
@@ -214,7 +213,6 @@ $('new-chat').addEventListener('click',()=>createConversation().catch(e=>error(e
 document.querySelectorAll('[data-prompt]').forEach(button=>button.addEventListener('click',()=>{const prompt=button.dataset.prompt;$('request-mode').value=/маршрут|за один день|за два дня/i.test(prompt)?'route':/музе/i.test(prompt)?'recommendations':'reference';$('request-mode').dispatchEvent(new Event('change'));$('question').value=prompt;send()}));
 checkAuth().catch(e=>error(e.message));
 
-// Подсказки зависят от выбранного режима; без новых запросов к серверу.
 const modeExamples = {
   route:['Например: составь маршрут по Парижу на два дня', 'Маршрут по дням на основе Wikivoyage; точная навигация не рассчитывается.'],
   recommendations:['Например: посоветуй интересные музеи Парижа', 'Подбор достопримечательностей на основе источников.'],

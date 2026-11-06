@@ -1,4 +1,3 @@
-"""Лёгкие тесты поиска без SentenceTransformers и ChromaDB."""
 import importlib.util
 import sys
 import types

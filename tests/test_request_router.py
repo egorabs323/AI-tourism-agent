@@ -1,4 +1,3 @@
-"""The explicit UI mode is authoritative; no obsolete request_router module."""
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory

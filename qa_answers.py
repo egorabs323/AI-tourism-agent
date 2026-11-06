@@ -1,4 +1,3 @@
-"""Source-grounded answers for topical modes of the local travel assistant."""
 import json
 import urllib.error
 import urllib.request

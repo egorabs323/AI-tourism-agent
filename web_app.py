@@ -37,7 +37,6 @@ UPLOADS = DATA / "uploads"
 app = FastAPI(title="Travel RAG — локальный туристический гид", version="0.1")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-# Один процесс генерации одновременно: важно для ПК с 8 ГБ ОЗУ.
 _busy = threading.Lock()
 _assistant = None
 _init_lock = threading.Lock()
@@ -80,8 +79,6 @@ def get_assistant():
     if _assistant is None:
         with _init_lock:
             if _assistant is None:
-                # Коллекция открывается при первом запросе; E5 загружается
-                # отдельно только при поиске векторов или работе с документами.
                 _assistant = RagAssistant(db=DATA / "chroma", articles=DATA / "processed" / "articles.jsonl")
     return _assistant
 
@@ -218,7 +215,6 @@ async def upload_document(conversation_id: str, file: UploadFile = File(...), us
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     document_id = str(uuid.uuid4())
-    # Общее ограничение конкуренции с Ollama, чтобы не запускать тяжёлые вычисления параллельно.
     try:
         def work():
             with _busy:
@@ -289,15 +285,12 @@ def delete_conversation(conversation_id: str, user=Depends(authenticated_user)):
 
 
 def generate_reply(conversation_id: str, question: str, destination: Optional[str], top_k: int, mode: str = "reference"):
-    """Выполняется вне event loop, последовательно, чтобы избежать пиков памяти."""
     with _busy:
         with database() as db:
             rows = db.execute("SELECT role, content FROM messages WHERE conversation_id=? ORDER BY id DESC LIMIT 6", (conversation_id,)).fetchall()
         history = [dict(role=r['role'], content=r['content']) for r in reversed(rows)]
         validate_mode(mode)
         assistant = get_assistant()
-        # Вопрос на русском без латинского названия города может не определиться.
-        # Поле destination явно задаётся пользователем в интерфейсе.
         explicit = detect_destination(question, assistant.titles)
         selected = explicit or destination or None
         if mode in {'reference', 'recommendations'} and not selected:
@@ -309,7 +302,6 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
         document_question = question + ' ' + prepared_query.query if prepared_query else question
         own_passages = search_documents(assistant, conversation_id, document_question, count=3)
         if own_passages:
-            # Вопрос о загруженном документе: НЕ смешиваем с общими статьями Wikivoyage.
             passages = own_passages
             identified = selected
         elif mode == 'route':
@@ -366,7 +358,6 @@ async def send_message(conversation_id: str, payload: ChatInput, user=Depends(au
         )
     except Exception as exc:
         logging.exception("Ошибка RAG")
-        # Сообщение не сохраняется, если генерация не удалась, чтобы можно было повторить попытку.
         raise HTTPException(503, f"Не удалось получить ответ: {exc}") from exc
     created = timestamp()
     with database() as db:

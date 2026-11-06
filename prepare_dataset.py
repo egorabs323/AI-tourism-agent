@@ -15,26 +15,18 @@ LICENSE = "CC BY-SA 4.0"
 
 
 def normalize_text(value: str) -> str:
-    """Удаляет управляющие пробелы, сохраняя текст без пересказа."""
     value = unicodedata.normalize("NFC", html.unescape(value or ""))
     value = value.replace("\u00a0", " ")
-    # На стадии RAG длинный текст хранится как связная последовательность слов.
     return re.sub(r"\s+", " ", value).strip()
 
 
 def preserve_layout(value: str) -> str:
-    """Keep original paragraph/list boundaries for new article exports.
-
-    Embedding text/chunk IDs retain the existing normalization. Existing
-    articles and vectors do not need to be regenerated.
-    """
     text = unicodedata.normalize('NFC', html.unescape(value or '')).replace('\u00a0', ' ')
     return '\n'.join(re.sub(r'[^\S\n]+', ' ', line).strip()
                      for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')).strip()
 
 
 def split_into_chunks(text: str, words_per_chunk: int = 220, overlap_words: int = 40) -> list[str]:
-    """Фиксированный чанкинг по словам с перекрытием, без потери слов."""
     if words_per_chunk <= 0:
         raise ValueError("words_per_chunk должен быть больше нуля")
     if overlap_words < 0 or overlap_words >= words_per_chunk:
@@ -47,8 +39,6 @@ def split_into_chunks(text: str, words_per_chunk: int = 220, overlap_words: int 
     chunks = []
     for start in range(0, len(words), step):
         end = min(start + words_per_chunk, len(words))
-        # Последний короткий хвост почти полностью совпадает с предыдущим.
-        # Чтобы избежать избыточного чанка, пропускаем такой хвост.
         if start and end == len(words) and len(words) - start <= overlap_words:
             break
         chunks.append(" ".join(words[start:end]))
@@ -178,7 +168,6 @@ def prepare(
                     "chunk_id": f"wv_{page_id}_{index:04d}",
                     "chunk_index": index,
                     "chunk_count": len(chunks),
-                    # Заголовок включен в текст для будущей векторизации.
                     "content": f"Destination: {title}\n{passage}",
                     "body": passage,
                     "word_count": len(passage.split()),

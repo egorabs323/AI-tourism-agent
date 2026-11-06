@@ -1,4 +1,3 @@
-"""Translate isolated, source-bound object facts; never search a name in mixed chunks."""
 from __future__ import annotations
 
 import hashlib
@@ -27,12 +26,6 @@ def _roman(number):
 
 
 def _source_summary(name, quote, destination=None):
-    """Render common literal fact relations without asking an LLM to reword them.
-
-    These are city-independent predicates with values taken from the bound
-    record: dimensions, dates, style, materials, collection, function. A place
-    name alone never activates a description. Unknown relations return empty.
-    """
     facts = []
     dimensions = re.findall(r'\b(\d+)\s*m\s+(high|in length|in width)\b', quote)
     if dimensions:
@@ -112,7 +105,6 @@ def _source_summary(name, quote, destination=None):
         person = next(_NAME.finditer(memorial.group(1)), None)
         if person:
             facts.append('Посвящён {}.'.format(person.group().strip()))
-    # Literal feature relations, not a fallback based on the attraction's name.
     features = [
         ('celebrated for its large dome', 'Известен своим большим куполом.'),
         ('rectangular brick building with no exterior decoration',
@@ -182,12 +174,10 @@ def _source_summary(name, quote, destination=None):
     design = re.search(r'\b(\d{1,2})(?:st|nd|rd|th)[ -]century design\b', quote)
     if design:
         facts.append('Проект относится к {} веку.'.format(_roman(int(design.group(1)))))
-    # Keep at most three informative facts, each activated by an explicit relation.
     return ' '.join(facts[:3])
 
 
 def _search_evidence(assistant, destination, names):
-    """Full city records: no per-stop Chroma queries, embedding or top-k cutoff."""
     passages = list(assistant.articles.city(destination))
     result = {}
     for name in names:
@@ -223,7 +213,6 @@ def _translation_valid(value, evidence, name):
     if any(s in value.casefold() for s in ('как языковая модель', 'только json', 'упомянут в',
                                            'упоминается в', 'нет информации', 'нет данных')):
         return ''
-    # Reject a new English entity; names supplied by Python may be retained.
     source_words = set(re.findall(r'[A-Za-zÀ-ÿ]+', evidence + ' ' + name))
     if any(w not in source_words for w in re.findall(r'[A-ZÀ-Þ][A-Za-zÀ-ÿ]+', value)):
         return ''
@@ -231,10 +220,6 @@ def _translation_valid(value, evidence, name):
 
 
 def _batch_translate(excerpts, model=None, generator=None, cache_dir=Path('data/cache/route_descriptions'), destination=None):
-    """One isolated object per call: Qwen 1.7B skips/swaps IDs in JSON batches.
-
-    Cache each verified source separately; no repeat calls for a failed object.
-    """
     if generator is None:
         from structured_routes import _ollama_json
         generator = _ollama_json

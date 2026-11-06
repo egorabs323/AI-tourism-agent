@@ -23,7 +23,6 @@ def load_chunks(path: Path, limit: int):
 
 
 def metadata(row):
-    # Chroma принимает в metadata лишь строку, число или bool, но не None.
     result = {}
     for field in ("article_id", "title", "url", "qid", "source", "snapshot", "license",
                   "lat", "lon", "chunk_index", "chunk_count", "word_count"):
@@ -47,7 +46,6 @@ def index_batch(collection, model, rows):
     if not fresh:
         return 0
     texts = [r["content"] for r in fresh]
-    # E5 требует префикс passage: для документов и query: для вопросов.
     vectors = model.encode(["passage: " + text for text in texts],
                            batch_size=16, show_progress_bar=False,
                            normalize_embeddings=True)

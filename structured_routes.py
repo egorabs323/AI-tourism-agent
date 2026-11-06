@@ -1,4 +1,3 @@
-"""Object records from local Wikivoyage, with source spans bound before generation."""
 from __future__ import annotations
 
 import json
@@ -34,12 +33,10 @@ def route_days(question: str) -> int:
 
 
 def is_route_question(question: str) -> bool:
-    """Compatibility for the console client; the web UI uses explicit modes."""
     return bool(re.search(r'маршрут|itinerary|route for', question, re.I))
 
 
 def _parse_json_object(text: str) -> dict | None:
-    """Разбирает ответ модели; допускает случайные Markdown-ограждения."""
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I).strip()
@@ -51,11 +48,6 @@ def _parse_json_object(text: str) -> dict | None:
 
 
 def _ollama_json(system: str, user: str, model: str | None, tokens: int = 700) -> dict:
-    """Один ограниченный по контексту вызов локальной Ollama.
-
-    Важное ограничение: формат JSON гарантирует синтаксис при успешной
-    генерации, но не гарантирует достоверность содержимого.
-    """
     url, selected_model = ollama_configuration(model)
     endpoint = url + '/api/chat'
     payload = {
@@ -100,17 +92,12 @@ def _ollama_json(system: str, user: str, model: str | None, tokens: int = 700) -
 
 
 def group_attractions(attractions: list[Attraction], days: int, per_day: int = 3) -> list[list[Attraction]]:
-    """Prefer highest-ranked attractions and keep same Wikivoyage district together.
-
-    This does NOT calculate distances and is not a shortest-path planner.
-    """
     picks = attractions[:days * per_day]
     result: list[list[Attraction]] = [[] for _ in range(days)]
     for attraction in picks:
         available = [i for i in range(days) if len(result[i]) < per_day]
         if not available:
             break
-        # Place in a day already containing the same district if capacity allows.
         same_district = [i for i in available
                          if any(a.title == attraction.title for a in result[i])]
         if same_district:
@@ -131,7 +118,6 @@ def render_route(groups: list[list[Attraction]], desc: dict[str, str], all_attra
             continue
         for number, a in enumerate(entries, 1):
             summary = desc.get(index[a], '')
-            # Имена и ссылки рендерит Python, модель не может добавить новые остановки.
             line = f'{number}. {a.name} [Источник {a.passage_index}]'
             if summary:
                 line += f' — {summary}'
@@ -147,8 +133,6 @@ def render_route(groups: list[list[Attraction]], desc: dict[str, str], all_attra
     return '\n'.join(lines).strip()
 
 
-# Syntax of proper names, not a city/landmark whitelist. Lower-case particles
-# permit names such as Palazzo dei Conservatori and Arc de Triomphe.
 _CAPITALS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' + ''.join(chr(i) for i in range(0xC0, 0x250) if chr(i).isupper())
 _WORD = r"(?:St\.|[" + re.escape(_CAPITALS) + r"][\w’'’-]*)"
 _NAME = re.compile(r"(?<![\w’'])" + _WORD + r"(?:\s+(?:(?:de|di|del|della|delle|dei|degli|des|du|of|the|in|and|la|le|da|dell['’])\s+)?" + _WORD + r"){0,7}")
@@ -202,8 +186,6 @@ class WikiRecord:
 
 def _candidate_names(text):
     for match in _NAME.finditer(text):
-        # A suffix is not an alias: Museum of Rome and National Museum of Rome
-        # are different institutions. Only document markers are stripped.
         yield _clean_name(match.group())
 
 
@@ -220,11 +202,6 @@ def _section_events(text):
 
 
 def _detached_heading(text):
-    """Recover a trailing listing title, rejecting coordinated POI captions.
-
-    Ownership is provisional here. The following record must agree in type;
-    its own explicit heading or named subject always takes precedence.
-    """
     tail = _sentences(text[-450:])[-1] if text.strip() else ''
     matches = list(_NAME.finditer(tail))
     if not matches:
@@ -242,8 +219,6 @@ def _detached_heading(text):
         return '', ''
     if any(_VERB.match(prefix[m.end():]) for m in _NAME.finditer(prefix)):
         return '', ''
-    # A bare title, an explicit alias, or a typed photo caption can supply a
-    # heading. An arbitrary final capitalized word in prose cannot.
     if prefix and not re.fullmatch(_WORD + r'\s+or', prefix) and not (_types(name) and suffix.startswith(',')):
         return '', ''
     return name, tail
@@ -268,7 +243,6 @@ def _clean_name(name: str) -> str:
 
 
 def _sentences(text: str) -> list[str]:
-    # Sentence boundaries cannot cross a record, newline or bullet.
     text = re.sub(r'\b(St|Mr|Dr)\.', r'\1<DOT>', text)
     return [s.replace('<DOT>', '.').strip() for s in
             re.split(r'(?<=[.!?])\s+(?=[A-ZÀ-ÖØ-Þ"“])|[\r\n]+', text) if s.strip()]
@@ -281,7 +255,6 @@ def _types(text: str) -> set:
 
 
 def _primary_type(text: str) -> set:
-    """Classify the subject noun phrase, never a later verb or neighbour."""
     if re.match(r'^(?:Built|Completed|Constructed|Designed|Founded)\b', text):
         text = text.split(',', 1)[-1]
     text = re.sub(r'^(?:It|This|These|They)\s+(?:is|was|are|were)\s+', '', text)
@@ -306,7 +279,6 @@ def _informative(text: str) -> bool:
 
 @lru_cache(maxsize=128)
 def _records(text: str) -> tuple:
-    """Keep section and listing ownership while walking the article once."""
     events = [(m.start(), m.end(), m.group()) for m in _section_events(text)]
     events += [(m.start(), m.end(), '*') for m in re.finditer(r'\*+', text)]
     events.sort()
@@ -326,7 +298,6 @@ def _records(text: str) -> tuple:
 
 
 def _description(text):
-    """First complete descriptive sentence after names, addresses and hours."""
     result = []
     sentences = _sentences(text)
     for index, sentence in enumerate(sentences):
@@ -345,8 +316,6 @@ def _description(text):
                 r'\b(?:is|was|were|are|built|housed|designed|houses|contains|features|decorated)\b', quote[:180], re.I))
             if not (grammatical or possessive or noun_predicate):
                 continue
-            # Once the actual prose starts, an unsupported first sentence is
-            # not permission to skip ahead to a neighbour or another subject.
             if _LOGISTICS.search(quote):
                 continue
             if not _informative(quote):
@@ -363,7 +332,6 @@ def _description(text):
 
 
 def _owned_quote(name, text):
-    """A listing title cannot own a paragraph about a different primary type."""
     quote = _description(text)
     if not quote:
         return ''
@@ -381,7 +349,6 @@ def _owned_quote(name, text):
 
 
 def _listing_names(record):
-    """Explicit bullet headings and bilingual heading metadata."""
     names = []
     for match in _NAME.finditer(record.text):
         name = _clean_name(match.group())
@@ -395,9 +362,9 @@ def _listing_names(record):
         if (native or photo) and re.search(r'\b(?:from|of|near|at|behind|opposite)(?:\s+the)?$', prefix, re.I):
             continue
         if photo and re.match(r'^[a-z]', suffix):
-            continue  # prose mentioning the name before an unrelated image filename
+            continue
         if _VERB.match(suffix) and not native:
-            continue  # a named subject is already handled by the direct clause
+            continue
         if match.start() == 0 or native or photo:
             body = suffix[photo_match.end():] if photo else suffix
             names.append((name, body, native or photo))
@@ -405,7 +372,6 @@ def _listing_names(record):
 
 
 def _subject_fact(sentence, name):
-    """Extract an independent named subject, including bilingual definitions."""
     target = name_key(name)
     for match in _NAME.finditer(sentence):
         subject = name_key(_clean_name(match.group()))
@@ -421,7 +387,7 @@ def _subject_fact(sentence, name):
         if not verb:
             continue
         if re.search(r',\s*(?:and|or)\b', tail[:verb.end()], re.I):
-            continue  # a coordinated group does not give one member the others' facts
+            continue
         if re.match(r'\s*(?:is said to have|was born|was voted|is buried|died|lived|founded)\b', tail, re.I):
             continue
         predicate = re.split(r'\b(?:of|in|near|from|with)\b', tail, maxsplit=1, flags=re.I)[0][:100]
@@ -444,7 +410,6 @@ def _subject_fact(sentence, name):
 
 @lru_cache(maxsize=128)
 def _fact_index(text):
-    """Index attributable facts once per article, rather than once per name."""
     found = {}
     for record in _records(text):
         if record.section not in _FACT_SECTIONS:
@@ -486,7 +451,6 @@ def _fact_index(text):
 
 
 def object_facts(text: str, name: str) -> list[tuple[int, str]]:
-    """Look up object-owned records in the article's section-aware fact index."""
     return list(_fact_index(text).get(name_key(name), ()))
 
 def _evidence(text: str, name: str) -> str:
@@ -518,7 +482,6 @@ def validate_attractions(raw: list, passages: list[Passage], max_items: int = 18
 
 
 def _mention_counts(text, keys):
-    """Count candidate phrases with a small trie, without rescanning per name."""
     trie = {}
     for key in keys:
         node = trie
@@ -539,10 +502,6 @@ def _mention_counts(text, keys):
 
 
 def _prominence_key(name):
-    """A type designation may help find overview mentions, but never rename a POI.
-
-    This key is used only for ranking: it cannot attach another name's facts.
-    """
     words = name.split()
     if len(words) > 2 and _types(words[0]) and words[1].lower() in {'de', 'di', 'of'}:
         return name_key(' '.join(words[2:]))
@@ -550,7 +509,6 @@ def _prominence_key(name):
 
 
 def evidence_options(passages, name):
-    """Shared ownership/availability checks for selection and source rendering."""
     kinds = _types(name)
     options = []
     for i, passage in enumerate(passages, 1):
@@ -577,7 +535,6 @@ def evidence_options(passages, name):
 
 
 def city_catalogue(passages: list[Passage], destination: str, question: str = '') -> list[Attraction]:
-    """Rank named, owned sightseeing records; transport/hospitality is not searched."""
     spellings, source_text, overview, capitals, tokens = {}, [], [], Counter(), Counter()
     for passage in passages:
         for word in re.findall(r"[^\W\d_][\w’'-]*", passage.text):
@@ -607,8 +564,6 @@ def city_catalogue(passages: list[Passage], destination: str, question: str = ''
         if key in district_keys or key in generic or (len(kinds) < 2 and set(key.split()).issubset(generic_words)) or kinds.intersection({'lodging', 'dining'}):
             continue
         if len(name.split()) == 1 and not kinds:
-            # Sentence-initial adverbs are not names. Independently repeated,
-            # consistently capitalized proper names (e.g. Colosseum) survive.
             if tokens[key] < 2 or capitals[key] / max(tokens[key], 1) < .8:
                 continue
         if ' and ' in name and all(_types(part) for part in name.split(' and ')):
@@ -617,8 +572,6 @@ def city_catalogue(passages: list[Passage], destination: str, question: str = ''
         if not options:
             continue
         confidence, _, i, passage, fact = max(options, key=lambda item: (item[0], item[1]))
-        # Prominence in the city's sights overview outweighs repeated mentions
-        # in a district guide. Construction dates do not make a church famous.
         overview_mentions = max(main_counts[key], main_counts[_prominence_key(name)])
         score = 2 * min(counts[key], 12) + 10 * min(overview_mentions, 5)
         score += confidence / 40
@@ -671,9 +624,6 @@ def extract_route_candidates(passages: list[Passage], destination: str, days: in
                                    destination, question)
     if not candidates:
         return [], {}
-    # Ranking is deterministic. A 1.7B model is unreliable at selecting IDs
-    # from a catalogue: actual local validation showed it rejecting confirmed
-    # landmarks and keeping generic institutions. It only translates facts.
     return list(candidates[:days * 3]), {}
 
 

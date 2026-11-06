@@ -1,5 +1,3 @@
-"""Three task modes required by the travel-assistant assignment. Python 3.9+."""
-
 MODES = {
     'route': {
         'name': 'Планирование маршрутов',

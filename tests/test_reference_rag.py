@@ -1,4 +1,3 @@
-"""Synthetic reference RAG regressions: no live model or production city lists."""
 import json
 import unittest
 from unittest.mock import Mock

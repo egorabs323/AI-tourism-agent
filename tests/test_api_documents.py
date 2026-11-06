@@ -1,4 +1,3 @@
-"""Проверка HTTP API без реальных моделей и ChromaDB."""
 import tempfile
 import unittest
 from pathlib import Path

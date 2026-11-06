@@ -1,8 +1,3 @@
-"""Консольный чат с RAG, фильтрацией направления и опциональным LLM.
-
-python chat_rag.py --question "Какие достопримечательности посетить в Риме за два дня?" --no-llm
-python chat_rag.py --destination Rome   # интерактивный диалог, требует установленной и запущенной Ollama
-"""
 from __future__ import annotations
 
 import argparse
@@ -52,7 +47,6 @@ def main():
             if args.without_rag:
                 passages, detected = [], None
             else:
-                # Следующий вопрос с новым явно названным городом переключает направление.
                 from rag_pipeline import detect_destination, resolve_title
                 explicit = detect_destination(question, assistant.titles)
                 requested = explicit or args.destination or previous_destination
