@@ -194,7 +194,7 @@ class RagAssistant:
         self._encoder = value
 
     def retrieve(self, question: str, destination: Optional[str] = None,
-                 top_k: int = 8) -> tuple[list, Optional[str]]:
+                 top_k: int = 8, mode: Optional[str] = None) -> tuple[list, Optional[str]]:
         """Городской поиск: несколько коротких запросов и лёгкое CPU-ранжирование.
 
         Не изменяет коллекцию и не вызывает LLM. Для НЕмаршрутных вопросов
@@ -212,7 +212,7 @@ class RagAssistant:
             where = ({"title": {"$in": relevant_titles}} if len(relevant_titles) > 1
                      else {"title": relevant_titles[0]})
 
-        route_intent = bool(re.search(
+        route_intent = mode not in {'reference', 'recommendations'} and bool(re.search(
             r"маршрут|достопримечательност|посмотрет|посетит|"
             r"itinerary|sightseeing|things to see|must.see|attractions",
             question.casefold()))

@@ -54,6 +54,15 @@ class SearchTests(unittest.TestCase):
     def test_regular_question_single_query(self):
         self.assistant.retrieve('What is the city history?', 'Rome', 3)
         self.assertEqual(len(self.assistant.encoder.calls[0]),1)
+    def test_reference_mode_keeps_specific_query_even_with_route_keyword(self):
+        question = 'What does the word sightseeing itinerary mean?'
+        self.assistant.retrieve(question, 'Rome', 3, mode='reference')
+        self.assertEqual(self.assistant.encoder.calls[0], ['query: ' + question])
+    def test_recommendations_preserve_different_interest_queries(self):
+        queries = ['art museums recommended attractions', 'parks and gardens, no museums recommended attractions']
+        for question in queries:
+            self.assistant.retrieve(question, 'Rome', 3, mode='recommendations')
+        self.assertEqual(self.assistant.encoder.calls, [['query: ' + q] for q in queries])
     def test_rejects_top_k_zero(self):
         with self.assertRaises(ValueError):
             self.assistant.retrieve('маршрут','Rome',0)

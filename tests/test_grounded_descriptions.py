@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from rag_pipeline import ArticleStore, Passage
-from structured_routes import object_facts, city_catalogue, answer_route, extract_route_candidates
+from structured_routes import object_facts, city_catalogue, answer_route, extract_route_candidates, evidence_options
 from route_enrichment import _batch_translate, _translation_valid, _source_summary
 
 
@@ -38,7 +38,7 @@ class GroundedDescriptionsTests(unittest.TestCase):
     def test_photo_metadata_is_removed_before_subject_detection(self):
         text = ('* Notre Dame de Paris 2013-07-24.jpg The early Gothic Cathédrale de '
                 "Notre Dame (Our Lady) has a 12th century design but wasn't completed until the 14th.")
-        facts = object_facts(text, 'Notre Dame')
+        facts = object_facts(text, 'Cathédrale de Notre Dame')
         self.assertTrue(facts)
         self.assertNotIn('.jpg', facts[0][1])
 
@@ -132,6 +132,91 @@ class GroundedDescriptionsTests(unittest.TestCase):
         text = _source_summary('White Monument', 'White Monument is a marble monument designed by Ada Stone.')
         self.assertIn('мрамор', text)
         self.assertIn('Ada Stone', text)
+
+    def test_detached_heading_requires_matching_object_type(self):
+        self.assertTrue(object_facts('See Alpha Palace * A royal palace built in the 17th century.', 'Alpha Palace'))
+        self.assertEqual(object_facts('See Alpha Palace * A Buddhist temple built in 1500 with a large dome.', 'Alpha Palace'), [])
+
+    def test_prose_references_cannot_become_detached_headings(self):
+        for prefix in ['The garden is near Alpha Palace, imperial headquarters then',
+                       'Given the proximity to Alpha Palace, imperial headquarters then',
+                       'It’s smaller than Alpha Palace, but still worth visiting']:
+            with self.subTest(prefix=prefix):
+                self.assertEqual(object_facts('See ' + prefix + ' * A royal palace built in 1800.', 'Alpha Palace'), [])
+
+    def test_single_word_foreign_subject_cannot_own_listing(self):
+        text = 'See Alpha Park * Serpentine is a royal lake built in the 18th century.'
+        self.assertEqual(object_facts(text, 'Alpha Park'), [])
+
+    def test_coordinated_subject_does_not_transfer_shared_record(self):
+        text = 'Alpha Mosque (Blue Mosque), and Beta Cistern, are decorated with ancient columns.'
+        self.assertEqual(object_facts(text, 'Alpha Mosque'), [])
+
+    def test_exact_name_identity_does_not_attach_suffix_institution(self):
+        text = 'National Museum of Abc houses a collection of ancient sculptures.'
+        self.assertTrue(object_facts(text, 'National Museum of Abc'))
+        self.assertEqual(object_facts(text, 'Museum of Abc'), [])
+
+    def test_parent_institution_reference_does_not_own_branch_description(self):
+        text = ('See * branch of the National Museum of Abc (Museo Nazionale) '
+                'access to all four National Museum of Abc sites Branch Excavation.jpg '
+                'This museum is built on top of an ancient excavation site.')
+        self.assertEqual(object_facts(text, 'National Museum of Abc'), [])
+
+    def test_bilingual_listing_and_native_parenthetical_definition(self):
+        text = ('See * Museums Alpha Museum 西洋美術館 9:00-17:00. '
+                'This museum houses almost 100,000 art objects.')
+        facts = object_facts(text, 'Alpha Museum')
+        self.assertTrue(facts)
+        self.assertNotIn('9:00', facts[0][1])
+        text = 'Kōzan-ji (高山寺) is a Buddhist temple built in 1200 with a large collection of art.'
+        self.assertTrue(object_facts(text, 'Kōzan-ji'))
+
+    def test_unsupported_first_sentence_cannot_skip_to_another_object(self):
+        text = ('See Alpha Palace * It opened with much fanfare. '
+                'Beta Museum houses a collection of ancient art.')
+        self.assertEqual(object_facts(text, 'Alpha Palace'), [])
+
+    def test_hotel_and_sentence_adverb_are_not_route_stops(self):
+        text = ('See Alpha Palace is a royal palace built in 1700. '
+                'Downstairs is a small museum with a collection of ancient art. '
+                'Walk downstairs and explore downstairs. '
+                'Sleep Park Example Hotel is a royal residence built in 1800.')
+        p = Passage(text, 'City', 'https://en.wikivoyage.org/wiki/City', 0, '1')
+        self.assertEqual([a.name for a in city_catalogue([p], 'City')], ['Alpha Palace'])
+
+    def test_untyped_district_and_closed_record_are_not_usable_evidence(self):
+        text = ('West Quarter is an ancient district with a collection of museums. '
+                'Alpha Museum is an archaeological museum closed for renovation until 2025.')
+        p = Passage(text, 'City', 'https://en.wikivoyage.org/wiki/City', 0, '1')
+        self.assertEqual(evidence_options([p], 'West Quarter'), [])
+        self.assertEqual(evidence_options([p], 'Alpha Museum'), [])
+
+    def test_overview_prominence_outweighs_minor_district_listing(self):
+        passages = [Passage('See Alpha Mosque is a mosque built in 1600. Alpha Mosque is a royal mosque.',
+                            'City', 'https://en.wikivoyage.org/wiki/City', 0, '1'),
+                    Passage('See Beta Church * A church built in 1500 with ancient sculptures.',
+                            'City/Island', 'https://en.wikivoyage.org/wiki/City/Island', 0, '2')]
+        self.assertEqual(city_catalogue(passages, 'City')[0].name, 'Alpha Mosque')
+
+    def test_short_fact_summaries_preserve_dates_era_and_quantities(self):
+        cases = [
+            ('Completed in 537 AD, this is an ancient building.', '537 году'),
+            ('The shrine was built in the 4th century BC.', 'IV веке до н. э.'),
+            ('This museum houses almost 100,000 art objects.', 'почти 100 000 предметов искусства'),
+            ('The mosque has a great dome and six minarets.', '6 минаретов и большой купол'),
+        ]
+        for quote, expected in cases:
+            with self.subTest(quote=quote):
+                self.assertIn(expected, _source_summary('Example', quote))
+
+    def test_market_relocation_qualifier_survives_short_description(self):
+        text = ("Central Market was the world's largest wholesale fish market. "
+                'Although the wholesale operations moved, the outer market remains in place to welcome the public.')
+        fact = object_facts(text, 'Central Market')[0][1]
+        summary = _source_summary('Central Market', fact)
+        self.assertIn('Ранее был', summary)
+        self.assertIn('Внешний рынок продолжает принимать посетителей', summary)
 
 
 class ArticleStoreTests(unittest.TestCase):

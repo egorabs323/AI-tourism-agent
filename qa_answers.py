@@ -57,6 +57,12 @@ def build_qa_messages(question, passages, history, mode='reference'):
 
 
 def answer_factual(question, passages, history, mode='reference'):
+    if mode == 'reference':
+        from reference_rag import answer_reference
+        return answer_reference(question, passages)
+    if mode == 'recommendations':
+        from recommendation_rag import answer_recommendations
+        return answer_recommendations(question, passages, history)[0]
     if not passages:
         return 'В найденных документах нет ответа на этот вопрос.'
     from rag_pipeline import ollama_configuration

@@ -22,6 +22,8 @@ from structured_routes import answer_route
 from route_enrichment import enrich_route_answer
 from qa_answers import answer_factual
 from context_query import contextual_search_query
+from reference_rag import reference_search_query, reference_context, reference_sources
+from recommendation_rag import prepare_recommendations, answer_recommendations
 from request_modes import validate_mode, retrieval_query
 from user_documents import MAX_BYTES, ALLOWED_SUFFIXES, extract_text, index_document, search_documents, remove_document
 
@@ -298,7 +300,14 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
         # Поле destination явно задаётся пользователем в интерфейсе.
         explicit = detect_destination(question, assistant.titles)
         selected = explicit or destination or None
-        own_passages = search_documents(assistant, conversation_id, question, count=3)
+        if mode in {'reference', 'recommendations'} and not selected:
+            selected = next((city for message in reversed(history) if message['role'] == 'user'
+                             if (city := detect_destination(message['content'], assistant.titles))), None)
+        reference = reference_search_query(question, history, selected) if mode == 'reference' else None
+        recommendation = prepare_recommendations(question, history, selected) if mode == 'recommendations' else None
+        prepared_query = reference or recommendation
+        document_question = question + ' ' + prepared_query.query if prepared_query else question
+        own_passages = search_documents(assistant, conversation_id, document_question, count=3)
         if own_passages:
             # Вопрос о загруженном документе: НЕ смешиваем с общими статьями Wikivoyage.
             passages = own_passages
@@ -310,14 +319,28 @@ def generate_reply(conversation_id: str, question: str, destination: Optional[st
                 raise ValueError('Не найден город в локальной базе: ' + selected)
             passages = list(assistant.articles.city(identified)) if identified else []
         else:
-            search_question = contextual_search_query(question, history, destination=selected)
-            search_question = retrieval_query(search_question, mode)
-            passages, identified = assistant.retrieve(search_question, destination=selected, top_k=top_k)
+            search_question = prepared_query.query if prepared_query else contextual_search_query(question, history, destination=selected)
+            if mode != 'recommendations':
+                search_question = retrieval_query(search_question, mode)
+            if mode in {'reference', 'recommendations'}:
+                passages, identified = assistant.retrieve(search_question, destination=selected, top_k=top_k, mode=mode)
+            else:
+                passages, identified = assistant.retrieve(search_question, destination=selected, top_k=top_k)
+        if mode == 'reference':
+            articles = list(assistant.articles.city(identified)) if identified and not own_passages else []
+            passages = reference_context(question, reference, passages, articles)
+        if mode == 'recommendations':
+            articles = list(assistant.articles.city(identified)) if identified and not own_passages else passages
+            answer, sources = answer_recommendations(question, articles, history, request=recommendation,
+                                                    hits=passages, encoder=assistant.encoder)
+            return answer, sources, identified
         if mode == "route" and not own_passages:
             answer = answer_route(question, passages, identified)
             answer, passages = enrich_route_answer(answer, passages, assistant, identified)
         else:
             answer = answer_factual(question, passages, history, mode=mode)
+        if mode == 'reference':
+            return answer, reference_sources(passages), identified
         sources = []
         for index, passage in enumerate(passages, 1):
             sources.append({"number": index, "title": passage.title, "url": passage.url})

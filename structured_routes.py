@@ -149,8 +149,9 @@ def render_route(groups: list[list[Attraction]], desc: dict[str, str], all_attra
 
 # Syntax of proper names, not a city/landmark whitelist. Lower-case particles
 # permit names such as Palazzo dei Conservatori and Arc de Triomphe.
-_WORD = r"(?:St\.|[A-ZÀ-ÖØ-Þ][\wÀ-ÿ’'’-]*)"
-_NAME = re.compile(r"(?<![\w’'])" + _WORD + r"(?:\s+(?:(?:de|di|del|della|dei|degli|des|du|of|the|in|and|la|le|da|dell['’])\s+)?" + _WORD + r"){0,7}")
+_CAPITALS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' + ''.join(chr(i) for i in range(0xC0, 0x250) if chr(i).isupper())
+_WORD = r"(?:St\.|[" + re.escape(_CAPITALS) + r"][\w’'’-]*)"
+_NAME = re.compile(r"(?<![\w’'])" + _WORD + r"(?:\s+(?:(?:de|di|del|della|delle|dei|degli|des|du|of|the|in|and|la|le|da|dell['’])\s+)?" + _WORD + r"){0,7}")
 _VERB = re.compile(r'^\s*(?:\([^)]{1,100}\)\s*)?(?:,\s*[^,]{1,120},\s*)?'
                    r'(?:(?:when completed|originally)\s+)?'
                    r'(?:is|are|was|were|has|have|houses|contains|features|stands|dates|measured|commemorates)\b', re.I)
@@ -159,7 +160,9 @@ _FACT = re.compile(r'\b(?:built|construct\w*|design\w*|centur\w*|dome|gothic|bar
                    r'fresco\w*|archaeolog\w*|amphitheat\w*|aqueduct\w*|'
                    r'royal|residence|drawbridge|exhibits?|artworks?|'
                    r'commemorat\w*|contains|houses|decorat\w*|measured|'
-                   r'founded|dedicated|architecture|largest|tombs?|buried)\b', re.I)
+                   r'founded|dedicated|architecture|largest|oldest|tallest|grandest|'
+                   r'imperial|popular|famous|symbol|water|columns?|minarets?|Buddhist|Shinto|'
+                   r'blossoms?|tombs?|buried)\b', re.I)
 _LOGISTICS = re.compile(r'\b(?:pickpockets?|scams?|thieves|souvenir|hotels?|hostels?|'
                         r'restaurants?|café|cafe|pubs?|booking|bus|metro|tube|station|'
                         r'tickets?|queues?|admission|timetable|tour operator|luggage|airport)\b', re.I)
@@ -173,7 +176,77 @@ _TYPES = {
     'fountain': ('fountain', 'fontana'), 'arch': ('arch', 'arc'),
     'building': ('building', 'house', 'castle', 'fortress', 'auditorium', 'monument', 'memorial', 'observatory'),
     'architecture': ('dome', 'amphitheatre', 'amphitheater', 'temple', 'ruins', 'theatre', 'theater', 'aqueduct'),
+    'mosque': ('mosque', 'camii'), 'shrine': ('shrine', 'jingu', 'jinja'),
+    'cistern': ('cistern',), 'market': ('bazaar', 'market'),
+    'gate': ('gate', 'gates'),
+    'lodging': ('hotel', 'hostel', 'ryokan', 'resort'),
+    'dining': ('restaurant', 'cafe', 'café', 'bar', 'pub'),
+    'sculpture': ('statue', 'sculpture', 'column', 'obelisk'),
+    'street': ('street', 'avenue', 'boulevard', 'road', 'promenade'),
+    'region': ('neighbourhood', 'neighborhood', 'district', 'ward', 'area'),
 }
+
+_SECTIONS = re.compile(r'(?<![\w/#])(?:Get in|Get around|Stay safe|Stay healthy|Go next|Understand|See|Do|Buy|Eat|Drink|Sleep|Connect|Cope|Learn|Work|Respect)(?=\s+(?:[' + re.escape(_CAPITALS) + r']|\*))')
+_SECTION_NAMES = {'Get in', 'Get around', 'Stay safe', 'Stay healthy', 'Go next', 'Understand', 'See', 'Do', 'Buy', 'Eat', 'Drink', 'Sleep', 'Connect', 'Cope', 'Learn', 'Work', 'Respect'}
+_ROUTE_SECTIONS = {'intro', 'Understand', 'See', 'Do', 'Buy'}
+_FACT_SECTIONS = _ROUTE_SECTIONS | {'Get in', 'Get around'}
+
+
+@dataclass(frozen=True)
+class WikiRecord:
+    text: str
+    section: str
+    heading: str = ''
+    heading_context: str = ''
+
+
+def _candidate_names(text):
+    for match in _NAME.finditer(text):
+        # A suffix is not an alias: Museum of Rome and National Museum of Rome
+        # are different institutions. Only document markers are stripped.
+        yield _clean_name(match.group())
+
+
+def _section_events(text):
+    for match in _SECTIONS.finditer(text):
+        before = text[max(0, match.start() - 12):match.start()]
+        after = text[match.end():match.end() + 70].lstrip()
+        if re.search(r'(?:see|See)\s+$|["“(]\s*$', before):
+            continue
+        if match.group() == 'See' and ('#' in after.split(' ', 1)[0] or
+                any(after.startswith(section + ' ') for section in _SECTION_NAMES)):
+            continue
+        yield match
+
+
+def _detached_heading(text):
+    """Recover a trailing listing title, rejecting coordinated POI captions.
+
+    Ownership is provisional here. The following record must agree in type;
+    its own explicit heading or named subject always takes precedence.
+    """
+    tail = _sentences(text[-450:])[-1] if text.strip() else ''
+    matches = list(_NAME.finditer(tail))
+    if not matches:
+        return '', ''
+    match = matches[-1]
+    name = _clean_name(match.group())
+    suffix, prefix = tail[match.end():].strip(), tail[:match.start()].strip()
+    if suffix and not suffix.startswith(','):
+        return '', ''
+    if ' and ' in name and all(_types(part) for part in name.split(' and ')):
+        return '', ''
+    if re.search(r'\b(?:near|of|at|by|from|to|behind|opposite|beside)(?:\s+the)?$', prefix, re.I):
+        return '', ''
+    if re.search(r"\b(?:is|was|are|were|has|have|\w+['’](?:s|re))\b", prefix, re.I):
+        return '', ''
+    if any(_VERB.match(prefix[m.end():]) for m in _NAME.finditer(prefix)):
+        return '', ''
+    # A bare title, an explicit alias, or a typed photo caption can supply a
+    # heading. An arbitrary final capitalized word in prose cannot.
+    if prefix and not re.fullmatch(_WORD + r'\s+or', prefix) and not (_types(name) and suffix.startswith(',')):
+        return '', ''
+    return name, tail
 
 
 def name_key(name: str) -> str:
@@ -183,6 +256,10 @@ def name_key(name: str) -> str:
 
 def _clean_name(name: str) -> str:
     name = re.sub(r'^(?:The|A|An)\s+', '', name.strip().rstrip('.'))
+    name = re.sub(r'^(?:Gothic|Baroque|Medieval|Romanesque|Neoclassical)\s+', '', name)
+    words = name.split()
+    if len(words) > 2 and words[0].lower().endswith('s') and _types(words[0]).intersection(_types(' '.join(words[1:]))):
+        name = ' '.join(words[1:])
     words = name.split()
     for size in range(1, len(words) // 2 + 1):
         if len(words) % size == 0 and words == words[:size] * (len(words) // size):
@@ -199,139 +276,218 @@ def _sentences(text: str) -> list[str]:
 
 def _types(text: str) -> set:
     words = set(name_key(text).split())
-    return {kind for kind, labels in _TYPES.items() if words.intersection(labels)}
+    return {kind for kind, labels in _TYPES.items() if any(
+        word in words or word + 's' in words or word + 'es' in words for word in labels)}
 
 
 def _primary_type(text: str) -> set:
-    """The first object noun owns a listing; later location nouns do not."""
-    for word in name_key(text).split():
+    """Classify the subject noun phrase, never a later verb or neighbour."""
+    if re.match(r'^(?:Built|Completed|Constructed|Designed|Founded)\b', text):
+        text = text.split(',', 1)[-1]
+    text = re.sub(r'^(?:It|This|These|They)\s+(?:is|was|are|were)\s+', '', text)
+    text = re.sub(r'^One of (?:the )?', '', text)
+    phrase = re.split(r'\b(?:is|was|are|were|has|have|houses|contains|features|stands|that|which|of|on|in|near|with)\b', text, maxsplit=1, flags=re.I)[0]
+    for word in name_key(phrase).split():
         for kind, labels in _TYPES.items():
-            if word in labels:
+            if word == 'dome':
+                continue
+            if any(word in (label, label + 's', label + 'es') for label in labels):
                 return {kind}
     return set()
 
 
 def _informative(text: str) -> bool:
-    return 35 <= len(text) <= 650 and bool(_FACT.search(text)) and not _LOGISTICS.search(text)
+    if not 35 <= len(text) <= 650 or not _FACT.search(text) or _LOGISTICS.search(text):
+        return False
+    words = {m.group().lower() for m in _FACT.finditer(text)}
+    weak = {'popular', 'famous', 'symbol', 'oldest', 'largest', 'tallest', 'grandest'}
+    return bool(words - weak or _types(text) or re.search(r'\d', text))
 
 
 @lru_cache(maxsize=128)
 def _records(text: str) -> tuple:
+    """Keep section and listing ownership while walking the article once."""
+    events = [(m.start(), m.end(), m.group()) for m in _section_events(text)]
+    events += [(m.start(), m.end(), '*') for m in re.finditer(r'\*+', text)]
+    events.sort()
+    records, section, start, heading, context = [], 'intro', 0, '', ''
+    for left, right, marker in events + [(len(text), len(text), '')]:
+        body = text[start:left].strip()
+        if body:
+            records.append(WikiRecord(body, section, heading, context))
+        if marker == '*':
+            heading, context = _detached_heading(body)
+        else:
+            heading, context = '', ''
+            if marker:
+                section = marker
+        start = right
+    return tuple(records)
+
+
+def _description(text):
+    """First complete descriptive sentence after names, addresses and hours."""
     result = []
-    for block in re.split(r'\*+|\n\s*[-•]\s+', text):
-        result.append((block, block.casefold(), _sentences(block)))
-    return tuple(result)
+    sentences = _sentences(text)
+    for index, sentence in enumerate(sentences):
+        sentence = re.split(r'\.(?:jpe?g|png|webp)\b\s*', sentence, flags=re.I)[-1]
+        for match in re.finditer(r'(?<!\w)[' + re.escape(_CAPITALS) + r'][\w’\'-]*\b', sentence):
+            quote = sentence[match.start():].strip()
+            if len(match.group()) > 1 and match.group().isupper():
+                continue
+            if re.search(r'\d{1,2}:\d{2}|[€¥£$]|\b(?:Daily|Adult|Entry)\b', quote):
+                continue
+            if ')' in quote.split('(', 1)[0]:
+                continue
+            grammatical = bool(re.match(r'^(?:A|An|The|This|These|It|Its|One|Built|Completed|Constructed|Designed|Founded|Opened|Originally|Surrounded|With|Has|Houses|Contains|Features|Displays|Exhibits|Dedicated)\b', quote))
+            possessive = bool(re.match(_WORD + r"['’]s\b", quote))
+            noun_predicate = bool(_primary_type(quote) and re.search(
+                r'\b(?:is|was|were|are|built|housed|designed|houses|contains|features|decorated)\b', quote[:180], re.I))
+            if not (grammatical or possessive or noun_predicate):
+                continue
+            # Once the actual prose starts, an unsupported first sentence is
+            # not permission to skip ahead to a neighbour or another subject.
+            if _LOGISTICS.search(quote):
+                continue
+            if not _informative(quote):
+                return ''
+            if index + 1 < len(sentences):
+                following = sentences[index + 1]
+                if (re.match(r'^(?:It|This|These|They)\b', following) and _informative(following)
+                        and len(quote) + len(following) < 650):
+                    quote += ' ' + following
+            return quote
+        if result:
+            break
+    return result[0] if result else ''
 
 
-def _subject_fact(sentence: str, name: str) -> str:
-    """Require the name to be the subject, never a location or image caption.
+def _owned_quote(name, text):
+    """A listing title cannot own a paragraph about a different primary type."""
+    quote = _description(text)
+    if not quote:
+        return ''
+    expected, actual = _types(name), _primary_type(quote)
+    if expected and actual and not expected.intersection(actual):
+        return ''
+    first = next(_NAME.finditer(quote), None)
+    pronouns = {'the', 'a', 'an', 'it', 'this', 'these', 'they', 'there', 'one', 'those'}
+    if first and _VERB.match(quote[first.end():]) and name_key(_clean_name(first.group())) not in pronouns:
+        subject = name_key(_clean_name(first.group()))
+        target = name_key(name)
+        if subject != target:
+            return ''
+    return quote
 
-    Matching a proper noun somewhere in a 220-word chunk is insufficient.
-    Only the independent clause naming the object is returned.
-    """
+
+def _listing_names(record):
+    """Explicit bullet headings and bilingual heading metadata."""
+    names = []
+    for match in _NAME.finditer(record.text):
+        name = _clean_name(match.group())
+        if not _types(name):
+            continue
+        suffix = record.text[match.end():].lstrip()
+        native = bool(re.match(r'\(?[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]', suffix))
+        photo_match = re.match(r'[^.!?]{0,90}\.(?:jpe?g|png|webp)\b', suffix, re.I)
+        photo = bool(photo_match)
+        prefix = record.text[:match.start()].rstrip()
+        if (native or photo) and re.search(r'\b(?:from|of|near|at|behind|opposite)(?:\s+the)?$', prefix, re.I):
+            continue
+        if photo and re.match(r'^[a-z]', suffix):
+            continue  # prose mentioning the name before an unrelated image filename
+        if _VERB.match(suffix) and not native:
+            continue  # a named subject is already handled by the direct clause
+        if match.start() == 0 or native or photo:
+            body = suffix[photo_match.end():] if photo else suffix
+            names.append((name, body, native or photo))
+    return names
+
+
+def _subject_fact(sentence, name):
+    """Extract an independent named subject, including bilingual definitions."""
     target = name_key(name)
     for match in _NAME.finditer(sentence):
-        subject = _clean_name(match.group())
-        # Descriptive modifiers (e.g. 'early Gothic Cathédrale de Notre Dame')
-        # can precede an exact name; a longer proper name cannot follow it.
-        key = name_key(subject)
-        if key != target and not key.endswith(' ' + target):
+        subject = name_key(_clean_name(match.group()))
+        if subject != target:
             continue
-        if key != target and len(target.split()) == 1:
+        prefix, tail = sentence[:match.start()].strip(), sentence[match.end():]
+        clause = bool(re.search(r',\s*(?:the|a|an)?\s*$', prefix, re.I))
+        native = bool(re.match(r'\s*\([\u3040-\u30ff\u3400-\u9fff]', tail))
+        modifier = bool(re.fullmatch(r'(?:The|A|An|early|late|great|famous|Gothic|Baroque|\s)+', prefix))
+        if prefix and not (clause or native or modifier):
             continue
-        prefix = sentence[:match.start()].strip()
-        clause_start = bool(re.search(r',\s*(?:the|a|an)?\s*$', prefix, re.I))
-        if prefix and not clause_start and (not re.fullmatch(r'(?:The|A|An|early|late|great|famous|Gothic|Baroque|\s)+', prefix)
-                                            or _RELATION.search(prefix)):
+        verb = _VERB.match(tail)
+        if not verb:
             continue
-        tail = sentence[match.end():]
-        if _VERB.match(tail):
-            if re.match(r'\s*(?:is said to have|was born|was voted|is buried|died|lived|founded)\b', tail, re.I):
-                continue  # a person's biography is not a building's history
-            predicate = re.split(r'\b(?:of|in|near|from|with)\b', tail, maxsplit=1, flags=re.I)[0][:100]
-            if re.search(r'\b(?:area|district|city|country|region|neighbou?rhood)\b', predicate, re.I):
-                continue
-            if re.search(r'\bis not an?\b', predicate, re.I):
-                continue
-            # A repeated image caption can precede the actual subject.
-            at = match.group().casefold().rfind(name.casefold()) if match.group().casefold().count(name.casefold()) > 1 else 0
-            fact = sentence[match.start() + max(0, at):].strip()
-            # Stop before a new named subject in a compound sentence.
-            for other in _NAME.finditer(fact, match.end() - match.start() - max(0, at)):
-                if _VERB.match(fact[other.end():]) and name_key(_clean_name(other.group())) != key:
-                    boundary = max(fact.rfind(',', 0, other.start()), fact.rfind(';', 0, other.start()))
-                    if boundary >= 0:
-                        fact = fact[:boundary].rstrip() + '.'
-                        break
-            if _informative(fact):
-                return fact
+        if re.search(r',\s*(?:and|or)\b', tail[:verb.end()], re.I):
+            continue  # a coordinated group does not give one member the others' facts
+        if re.match(r'\s*(?:is said to have|was born|was voted|is buried|died|lived|founded)\b', tail, re.I):
+            continue
+        predicate = re.split(r'\b(?:of|in|near|from|with)\b', tail, maxsplit=1, flags=re.I)[0][:100]
+        if re.search(r'\b(?:area|district|city|country|region|neighbou?rhood)\b|\bis not an?\b', predicate, re.I):
+            continue
+        if re.search(r'\b(?:district|ward|neighbou?rhood)\b', tail[:120], re.I):
+            continue
+        at = match.group().casefold().rfind(name.casefold()) if match.group().casefold().count(name.casefold()) > 1 else 0
+        fact = sentence[match.start() + max(0, at):].strip()
+        for other in _NAME.finditer(fact, match.end() - match.start() - max(0, at)):
+            if _VERB.match(fact[other.end():]) and name_key(_clean_name(other.group())) != subject:
+                boundary = max(fact.rfind(',', 0, other.start()), fact.rfind(';', 0, other.start()))
+                if boundary >= 0:
+                    fact = fact[:boundary].rstrip() + '.'
+                    break
+        if _informative(fact) and _FACT.search(re.sub(re.escape(name), '', fact, flags=re.I)):
+            return fact
     return ''
 
 
+@lru_cache(maxsize=128)
+def _fact_index(text):
+    """Index attributable facts once per article, rather than once per name."""
+    found = {}
+    for record in _records(text):
+        if record.section not in _FACT_SECTIONS:
+            continue
+        names = set(_candidate_names(record.text))
+        if record.heading:
+            names.add(record.heading)
+        listings = _listing_names(record) if record.section in _ROUTE_SECTIONS else []
+        names.update(name for name, _, _ in listings)
+        for name in names:
+            if not 4 <= len(name) <= 90:
+                continue
+            if record.section == 'Buy' and 'market' not in _types(name):
+                continue
+            options = []
+            sentences = _sentences(record.text)
+            for sentence_index, sentence in enumerate(sentences):
+                sentence = re.split(r'\.(?:jpe?g|png|webp)\b\s*', sentence, flags=re.I)[-1]
+                fact = _subject_fact(sentence, name)
+                if fact:
+                    if sentence_index + 1 < len(sentences):
+                        following = sentences[sentence_index + 1]
+                        if re.match(r'^(?:Although|However|Today|Now)\b', following) and len(fact) + len(following) < 650:
+                            fact += ' ' + following
+                    options.append((100, fact))
+            for title, body, native in listings:
+                if name_key(title) == name_key(name):
+                    fact = _owned_quote(name, body)
+                    if fact:
+                        options.append((115 if native else 110, fact))
+            if record.section in _ROUTE_SECTIONS and record.heading and name_key(name) == name_key(record.heading):
+                fact = _owned_quote(name, record.text)
+                if fact:
+                    options.append((90, fact))
+            if options:
+                found.setdefault(name_key(name), []).extend(options)
+    return {key: tuple(sorted(set(values), key=lambda x: (-x[0], len(x[1]))))
+            for key, values in found.items()}
+
+
 def object_facts(text: str, name: str) -> list[tuple[int, str]]:
-    """Separate bullets FIRST. Never attach the text after '*' to a caption.
-
-    Old flattened data has missing listing names. Such records are used only
-    when a name occurs inside the record and the primary object type agrees.
-    Ambiguous/no-name records are left unavailable rather than guessed.
-    """
-    result = []
-    pattern = re.compile(r'(?<!\w)' + re.escape(name) + r'(?!\w)', re.I)
-    for block, lowered, sentences in _records(text):
-        if name.casefold() not in lowered or not pattern.search(block):
-            continue
-        prose = [re.split(r'\.(?:jpe?g|png|webp)\b\s*', s, flags=re.I)[-1] for s in sentences]
-        for sentence in prose:
-            fact = _subject_fact(sentence, name)
-            if fact:
-                result.append((100, fact))
-        if not sentences:
-            continue
-        # Explicit 'Name. Description.' listings retain unambiguous ownership.
-        heading = sentences[0].rstrip('.')
-        if name_key(heading) == name_key(name):
-            facts = []
-            for sentence in sentences[1:4]:
-                if _LOGISTICS.search(sentence):
-                    break
-                if _informative(sentence):
-                    facts.append(sentence)
-                else:
-                    break
-            if facts:
-                result.append((110, ' '.join(facts[:2])))
-        # In a damaged listing no named header can safely be recovered from
-        # the PRECEDING bullet. A self-mention inside the SAME bullet plus a
-        # matching primary type is required. Reject a different named subject.
-        kinds = _types(name)
-        if not kinds or len(block) > 5000:
-            continue
-        # Image filenames and addresses are metadata, not a descriptive subject.
-        descriptive = [s for s in prose if _informative(s) and re.match(
-            r'^(?:The|A|An|This|These|Built|Completed|Constructed|Designed|Founded|Magnificent|One)\b', s)]
-        if not descriptive:
-            continue
-        first = descriptive[0]
-        # In flattened data a generic 'This church ...' without its original
-        # named heading has lost its owner. Do not guess it from nearby names.
-        # Construction clauses retain a primary object noun and a self-mention
-        # inside the same bullet, without borrowing a preceding caption.
-        if not re.match(r'^(?:Built|Completed|Constructed|Designed|Founded)\b', first):
-            continue
-        primary = _primary_type(re.split(r'\b(?:is|was|are|were|has|with|near|from|featur\w*)\b', first, maxsplit=1)[0])
-        if re.match(r'^(?:Built|Completed|Constructed|Designed|Founded)\b', first):
-            primary = _primary_type(first)
-        if not primary.intersection(kinds):
-            continue
-        other_subject = next((m for m in _NAME.finditer(first)
-                              if _VERB.match(first[m.end():]) and
-                              name_key(m.group()) != name_key(name) and
-                              not name_key(m.group()).endswith(' ' + name_key(name))), None)
-        if other_subject:
-            continue
-        result.append((60, first))
-    return sorted(set(result), key=lambda item: (-item[0], len(item[1])))
-
+    """Look up object-owned records in the article's section-aware fact index."""
+    return list(_fact_index(text).get(name_key(name), ()))
 
 def _evidence(text: str, name: str) -> str:
     facts = object_facts(text, name)
@@ -361,99 +517,150 @@ def validate_attractions(raw: list, passages: list[Passage], max_items: int = 18
     return good
 
 
-def city_catalogue(passages: list[Passage], destination: str, question: str = '') -> list[Attraction]:
-    """Names are corpus substrings; rank only objects with attributable facts.
-
-    Frequency is a weak prominence signal, not a hand-written popularity list.
-    Preferences add a score for facts actually present in the selected record.
-    """
+def _mention_counts(text, keys):
+    """Count candidate phrases with a small trie, without rescanning per name."""
+    trie = {}
+    for key in keys:
+        node = trie
+        for word in key.split():
+            node = node.setdefault(word, {})
+        node[''] = key
+    words = name_key(text).split()
     counts = Counter()
-    main_names = set()
-    spellings = {}
-    for p in passages:
-        for match in _NAME.finditer(p.text):
-            full = _clean_name(match.group())
-            # Drop descriptive capitalized modifiers without losing the exact
-            # corpus substring: 'Gothic Cathédrale de Notre Dame' -> 'Notre Dame'.
-            tokens = full.split()
-            names = [full]
-            if not _types(full):
-                names += [' '.join(tokens[i:]) for i in range(1, len(tokens) - 1)
-                          if tokens[i][0].isupper()]
-            for name in names:
-                key = name_key(name)
-                if not 4 <= len(name) <= 75 or key == name_key(destination):
+    for i, word in enumerate(words):
+        node = trie.get(word)
+        j = i + 1
+        while node is not None:
+            if '' in node:
+                counts[node['']] += 1
+            node = node.get(words[j]) if j < len(words) else None
+            j += 1
+    return counts
+
+
+def _prominence_key(name):
+    """A type designation may help find overview mentions, but never rename a POI.
+
+    This key is used only for ranking: it cannot attach another name's facts.
+    """
+    words = name.split()
+    if len(words) > 2 and _types(words[0]) and words[1].lower() in {'de', 'di', 'of'}:
+        return name_key(' '.join(words[2:]))
+    return name_key(name)
+
+
+def evidence_options(passages, name):
+    """Shared ownership/availability checks for selection and source rendering."""
+    kinds = _types(name)
+    options = []
+    for i, passage in enumerate(passages, 1):
+        for confidence, fact in object_facts(passage.text, name):
+            if not kinds:
+                if not (_types(fact) - {'region', 'dining', 'lodging'}) and 'measured' not in fact:
                     continue
-                if not _types(name) and len(name.split()) > 5:
-                    continue
-                counts[key] += 1
-                spellings.setdefault(key, name)
-                if p.title == destination:
-                    main_names.add(key)
-    entries = []
-    for key, count in counts.items():
-        name = spellings[key]
-        if any(key == name_key(p.title.rsplit('/', 1)[-1]) for p in passages):
-            continue  # a city/district article is not an individual stop
-        if key in {label for labels in _TYPES.values() for label in labels}:
-            continue
-        if len(name.split()) == 1 and (key in {
-                'this', 'these', 'those', 'there', 'they', 'also', 'here', 'that', 'which', 'what',
-                'some', 'most', 'many', 'other', 'one', 'two', 'three', 'four', 'five',
-                'see', 'understand', 'landmarks', 'churches', 'museums', 'piazza',
-                'tour', 'basilica', 'cathedral', 'palazzo', 'temple', 'garden', 'gardens',
-                'tower', 'bridge', 'church', 'museum', 'palace', 'square', 'park', 'arch'}):
-            continue
-        options = []
-        for i, p in enumerate(passages, 1):
-            for confidence, fact in object_facts(p.text, name):
-                if not _types(name) and not _types(fact) and 'measured' not in fact:
-                    continue
-                if not _types(name) and not _subject_fact(fact, name):
-                    continue
-                if not _types(name):
-                    # A feature of a neighbouring named place is not a type
-                    # statement about the subject (e.g. a district centred on
-                    # a park). Require an owned feature or a direct type clause.
+                if confidence == 100:
                     tail = fact[fact.casefold().find(name.casefold()) + len(name):]
-                    own_feature = bool(re.search(r'\b(?:its|measured)\b', tail) or
-                                       re.match(r'\s*(?:has|houses|contains|features)\b', tail))
-                    type_clause = re.match(r'\s*(?:is|was)\s+(?:a|an|the)\s+', tail)
-                    if not own_feature and not (type_clause and _types(tail.split(',')[0])):
+                    verb = _VERB.match(tail)
+                    complement = tail[verb.end():] if verb else ''
+                    own_feature = re.search(r'\b(?:its|measured|home of)\b', tail)
+                    if not own_feature and not (_primary_type(complement) - {'region', 'dining', 'lodging'}):
                         continue
-                options.append((confidence, len(fact), i, p, fact))
+                elif confidence == 90:
+                    physical_caption = any(name_key(r.heading) == name_key(name) and _types(r.heading_context)
+                                           for r in _records(passage.text))
+                    if not physical_caption:
+                        continue
+            if re.search(r'\bclosed (?:for|until)|permanently closed\b', fact, re.I) and not re.search(r'\bre-?opened\b', fact, re.I):
+                continue
+            options.append((confidence, min(len(fact), 400), i, passage, fact))
+    return options
+
+
+def city_catalogue(passages: list[Passage], destination: str, question: str = '') -> list[Attraction]:
+    """Rank named, owned sightseeing records; transport/hospitality is not searched."""
+    spellings, source_text, overview, capitals, tokens = {}, [], [], Counter(), Counter()
+    for passage in passages:
+        for word in re.findall(r"[^\W\d_][\w’'-]*", passage.text):
+            key = name_key(word)
+            tokens[key] += 1
+            if word[0].isupper():
+                capitals[key] += 1
+        for record in _records(passage.text):
+            if record.section not in _FACT_SECTIONS:
+                continue
+            source_text.append(record.text)
+            if passage.title == destination and record.section == 'See':
+                overview.append(record.text)
+            for name in list(_candidate_names(record.text)) + ([record.heading] if record.heading else []):
+                key = name_key(name)
+                if 4 <= len(name) <= 90 and len(name.split()) <= 9:
+                    spellings.setdefault(key, name)
+    counts = _mention_counts(' '.join(source_text), spellings)
+    prominence_keys = {_prominence_key(name) for name in spellings.values()}
+    main_counts = _mention_counts(' '.join(overview), set(spellings) | prominence_keys)
+    district_keys = {name_key(p.title.rsplit('/', 1)[-1]) for p in passages}
+    generic = {form for labels in _TYPES.values() for word in labels for form in (word, word + 's', word + 'es')}
+    generic_words = generic | {'of', 'the', 'and', 'national', 'city', 'regional', 'public', 'old', 'new', 'art'}
+    entries = []
+    for key, name in spellings.items():
+        kinds = _types(name)
+        if key in district_keys or key in generic or (len(kinds) < 2 and set(key.split()).issubset(generic_words)) or kinds.intersection({'lodging', 'dining'}):
+            continue
+        if len(name.split()) == 1 and not kinds:
+            # Sentence-initial adverbs are not names. Independently repeated,
+            # consistently capitalized proper names (e.g. Colosseum) survive.
+            if tokens[key] < 2 or capitals[key] / max(tokens[key], 1) < .8:
+                continue
+        if ' and ' in name and all(_types(part) for part in name.split(' and ')):
+            continue
+        options = evidence_options(passages, name)
         if not options:
             continue
-        confidence, _, i, p, fact = max(options, key=lambda x: (x[0], min(x[1], 400)))
-        score = min(count, 40) + (8 if key in main_names else 0) + confidence / 20
+        confidence, _, i, passage, fact = max(options, key=lambda item: (item[0], item[1]))
+        # Prominence in the city's sights overview outweighs repeated mentions
+        # in a district guide. Construction dates do not make a church famous.
+        overview_mentions = max(main_counts[key], main_counts[_prominence_key(name)])
+        score = 2 * min(counts[key], 12) + 10 * min(overview_mentions, 5)
+        score += confidence / 40
+        if kinds.intersection({'museum', 'palace', 'church', 'mosque', 'shrine', 'cistern'}):
+            score += 8
+        elif kinds.intersection({'bridge', 'tower', 'square'}):
+            score += 4
+        if (re.search(r'\b(?:shopping|office building|eating)\b', fact, re.I)
+                and not re.search(r'\b(?:museum|temple|shrine|observatory|viewpoint|historic|ancient)\b', fact, re.I)
+                and not re.search(r'современн|архитектур|modern|architecture', question, re.I)):
+            score -= 10
+        rank_context = fact + ' ' + ' '.join(
+            record.heading_context for record in _records(passage.text)
+            if name_key(record.heading) == key)
+        if re.search(r'\btop \d+ (?:most )?visited\b', rank_context, re.I):
+            score += 50
+        elif re.search(r'\b(?:iconic|symbol|defining image|most visited|major attraction)\b', rank_context, re.I):
+            score += 20
+        elif re.search(r'\b(?:oldest|largest|tallest|grandest)\b', rank_context, re.I):
+            score += 8
         if re.search(r'истор|ancient|historic', question, re.I) and re.search(
-                r'\b(?:ancient|historic|century|built|medieval|gothic|baroque|roman)\b', fact, re.I):
-            score += 12
-        if re.search(r'музе|искусств|museum|art', question, re.I) and _types(name) == {'museum'}:
-            score += 16
-        if re.search(r'парк|сад|природ|park|garden', question, re.I) and _types(name) == {'park'}:
-            score += 16
-        if re.search(r'главн|известн|перв|famous|main|first', question, re.I):
-            score += min(count, 40) / 2 + (8 if key in main_names else 0)
-        entries.append((score, Attraction(name, i, p.title, p.url, fact)))
-    entries.sort(key=lambda row: (-row[0], name_key(row[1].name)))
-    unique, used_facts = [], {}
+                r'\b(?:ancient|historic|century|built|completed|medieval|gothic|baroque|roman)\b', fact, re.I):
+            score += 6
+        if re.search(r'музе|искусств|museum|art', question, re.I) and 'museum' in kinds:
+            score += 20
+        if re.search(r'парк|сад|природ|park|garden', question, re.I) and 'park' in kinds:
+            score += 20
+        entries.append((score, Attraction(name, i, passage.title, passage.url, fact)))
+    entries.sort(key=lambda item: (-item[0], name_key(item[1].name)))
+    unique = []
     for _, attraction in entries:
-        identity = (attraction.title, attraction.evidence)
-        alias = next((old for old in unique if old.title == attraction.title and
-                      (name_key(old.name).endswith(' ' + name_key(attraction.name)) or
-                       name_key(attraction.name).endswith(' ' + name_key(old.name))) and
-                      old.evidence[old.evidence.casefold().find(old.name.casefold()) + len(old.name):] ==
-                      attraction.evidence[attraction.evidence.casefold().find(attraction.name.casefold()) + len(attraction.name):]), None)
-        if alias:
-            continue
-        if identity not in used_facts:
-            used_facts[identity] = len(unique)
+        key = name_key(attraction.name)
+        duplicate = next((old for old in unique if old.title == attraction.title and (
+            old.evidence == attraction.evidence or
+            ((name_key(old.name).endswith(' ' + key) or key.endswith(' ' + name_key(old.name))) and
+             old.evidence[old.evidence.casefold().find(old.name.casefold()) + len(old.name):] ==
+             attraction.evidence[attraction.evidence.casefold().find(attraction.name.casefold()) + len(attraction.name):]))
+            ), None)
+        if not duplicate:
             unique.append(attraction)
-        else:
-            index = used_facts[identity]
-            if _types(attraction.name) and name_key(attraction.name).endswith(' ' + name_key(unique[index].name)):
-                unique[index] = attraction
+        elif key.endswith(' ' + name_key(duplicate.name)):
+            unique[unique.index(duplicate)] = attraction
     return unique
 
 

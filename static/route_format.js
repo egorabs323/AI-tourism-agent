@@ -34,13 +34,15 @@
         days.push(day);
         continue;
       }
-      // The citation is optional. An unreferenced stop must not break the whole route view.
-      const item = line.match(/^(?:[-*]\s*)?(\d+)[.)]\s+(.+?)(?:\s+\[Источник\s*(\d+)\])?(?:\s*[—–-]\s*(.*))?\s*$/i);
+      // A citation is a structural boundary. Dashes inside names are ordinary
+      // characters: Edo-Tokyo and Sensō-ji must remain complete titles.
+      const item = line.match(/^(?:[-*]\s*)?(\d+)[.)]\s+(.+?)\s+\[Источник\s*(\d+)\](?:\s+[—–-]\s+(.*))?\s*$/i)
+        || line.match(/^(?:[-*]\s*)?(\d+)[.)]\s+(.+?)(?:\s+([—–-])\s+(.*))?\s*$/i);
       if (day && item) {
         const name = item[2].replace(/^\*\*|\*\*$/g, '').trim();
         if (name && !/^источники\s*:/i.test(name)) {
           day.stops.push({ number: Number(item[1]), name,
-            source: item[3] ? Number(item[3]) : null,
+            source: item[3] && /^\d+$/.test(item[3]) ? Number(item[3]) : null,
             description: (item[4] || '').trim() });
           continue;
         }
