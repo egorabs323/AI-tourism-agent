@@ -93,7 +93,7 @@
 
 ### 2.2. Подготовка базы знаний
 
-<img width="656" height="543" alt="image" src="https://github.com/user-attachments/assets/5b5cfe31-c8a8-4e29-8a55-d6ad8012beb3" />
+<img width="697" height="633" alt="image" src="https://github.com/user-attachments/assets/c731a7d5-7f99-4862-bfc7-381f00bf8671" />
 
 *Рисунок 1 - Алгоритм подготовки базы знаний*
 
